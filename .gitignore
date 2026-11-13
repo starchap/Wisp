@@ -1,0 +1,31 @@
+# Python & AI Model Caches
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+backend-build/
+backend-dist/
+*.spec
+user_settings.json
+
+# Downloaded Local AI Models & Recorded Sessions (downloaded via Onboarding Wizard)
+data/models/
+data/sessions/
+backend/data/
+
+# Node / Vite / Electron Build Outputs
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/release/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS / Editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

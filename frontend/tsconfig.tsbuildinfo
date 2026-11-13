@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/api.ts","./src/i18n.ts","./src/main.tsx","./src/types.ts","./src/components/audioplayerbar.tsx","./src/components/headerbar.tsx","./src/components/liveanduploadbar.tsx","./src/components/modals.tsx","./src/components/speakerpanel.tsx","./src/components/transcriptfeed.tsx"],"version":"5.6.3"}
