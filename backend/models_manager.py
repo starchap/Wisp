@@ -55,6 +55,22 @@ def is_whisper_model_downloaded(model_id: str) -> bool:
     )
 
 
+def resolve_local_whisper_model(model_id: str = DEFAULT_WHISPER_MODEL) -> Dict[str, Path]:
+    """
+    Strictly local-only resolver used during transcription/language detection.
+    Never makes any network calls. If `model_id` is not on disk, falls back to any
+    other downloaded local Whisper model on disk.
+    """
+    if is_whisper_model_downloaded(model_id):
+        return get_whisper_onnx_paths(model_id)
+    for m in WHISPER_MODELS:
+        if is_whisper_model_downloaded(m["id"]):
+            return get_whisper_onnx_paths(m["id"])
+    raise FileNotFoundError(
+        f"Whisper model '{model_id}' is not downloaded locally. Please download a model in Settings."
+    )
+
+
 def is_speaker_model_downloaded() -> bool:
     return (
         config.SPEAKER_EMBEDDING_MODEL_PATH.exists()

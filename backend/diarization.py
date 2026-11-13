@@ -15,7 +15,8 @@ try:
 except ImportError:
     HAS_SHERPA = False
 
-from models_manager import ensure_speaker_model, is_speaker_model_downloaded
+from models_manager import is_speaker_model_downloaded
+import config as app_config
 
 SAMPLE_RATE = 16000
 
@@ -38,10 +39,10 @@ class LocalSpeakerDiarizer:
     def _get_extractor(self):
         if self._extractor is not None:
             return self._extractor
-        if not HAS_SHERPA:
+        if not HAS_SHERPA or not is_speaker_model_downloaded():
             return None
         try:
-            model_path = ensure_speaker_model()
+            model_path = app_config.SPEAKER_EMBEDDING_MODEL_PATH
             config = sherpa_onnx.SpeakerEmbeddingExtractorConfig(
                 model=str(model_path),
                 num_threads=2,
@@ -51,7 +52,7 @@ class LocalSpeakerDiarizer:
             self._extractor = sherpa_onnx.SpeakerEmbeddingExtractor(config)
             return self._extractor
         except Exception as exc:
-            print(f"[Diarizer] Could not load Sherpa-ONNX speaker model, using spectral voiceprint fallback: {exc}")
+            print(f"[Diarizer] Could not load local Sherpa-ONNX speaker model, using spectral voiceprint fallback: {exc}")
             return None
 
     def extract_embedding(self, audio_16k: np.ndarray) -> Optional[np.ndarray]:

@@ -172,6 +172,24 @@ export const TRANSLATIONS: Record<UILanguage, Record<string, string>> = {
     retranscribeBtn: 'Re-transcribe & Translate',
     retranscribeOnSave: 'Re-transcribe & translate audio with selected models',
     sessionModelsHeader: 'AI Models & Output Language for this Session',
+    privacyGuaranteeBadge: '100% Local & Offline',
+    privacyGuaranteeTitle: 'Data Privacy & 100% Offline Guarantee',
+    privacyGuaranteeSub:
+      'Technical guarantee that your audio, transcripts, and voiceprints never leave your computer.',
+    guarantee1Title: '1. Zero Data Ever Leaves This App',
+    guarantee1Desc:
+      'All meeting audio, speaker voiceprints, transcripts, and translations are processed strictly in local memory and stored only on your own disk. Nothing is ever uploaded to any cloud, server, or third party.',
+    guarantee2Title: '2. Works 100% Offline (Air-Gapped Ready)',
+    guarantee2Desc:
+      'Once your chosen AI models are downloaded locally, Wisp operates completely without an internet connection. The speech and translation pipeline never initiates network calls during use.',
+    guarantee3Title: '3. Enforced Localhost Firewall & Zero Telemetry',
+    guarantee3Desc:
+      'Enforced via Electron network request filtering and Content Security Policy (CSP): the app is technically locked to local loopback (127.0.0.1) with all telemetry disabled (DO_NOT_TRACK=1).',
+    guarantee4Title: '4. Full Local Storage Ownership',
+    guarantee4Desc:
+      'All recordings (.wav) and transcripts (.json) live in your chosen local folder and are permanently removed from disk when deleted.',
+    offlineReadyStatus: 'Offline Status: Ready for 100% Internet-Free Operation',
+    offlineMissingModels: 'Offline Status: Download models in Local AI Models tab to enable offline use',
   },
   da: {
     // Top HeaderBar
@@ -332,6 +350,24 @@ export const TRANSLATIONS: Record<UILanguage, Record<string, string>> = {
     retranscribeBtn: 'Transskriber & oversæt på ny',
     retranscribeOnSave: 'Transskriber & oversæt lyden på ny med valgte modeller',
     sessionModelsHeader: 'AI-Modeller & Outputsprog for denne session',
+    privacyGuaranteeBadge: '100% Lokal & Offline',
+    privacyGuaranteeTitle: 'Privatlivs- & 100% Offline-Garanti',
+    privacyGuaranteeSub:
+      'Teknisk garanti for at dine lydfiler, udskrifter og stemmeaftryk aldrig forlader din computer.',
+    guarantee1Title: '1. Ingen data forlader nogensinde appen',
+    guarantee1Desc:
+      'Al møde-lyd, stemmeaftryk, transskriberinger og oversættelser behandles udelukkende lokalt på din maskine og gemmes kun på din egen disk. Intet sendes til skyen, eksterne servere eller tredjeparter.',
+    guarantee2Title: '2. Kan bruges 100% Offline uden internet',
+    guarantee2Desc:
+      'Så længe dine valgte AI-modeller ligger lokalt på computeren, fungerer Wisp helt uden internetforbindelse (f.eks. i flytilstand). Talegenkendelses- og oversættelsesmotoren foretager aldrig netværkskald under brug.',
+    guarantee3Title: '3. Teknisk Netværksspærring & Nul Telemetri',
+    guarantee3Desc:
+      'Håndhævet via Electron netværksfilter og Content Security Policy (CSP): appen er teknisk låst til lokal loopback (127.0.0.1), og al telemetri/sporing er slået helt fra (DO_NOT_TRACK=1).',
+    guarantee4Title: '4. Fuld kontrol over egne lokale filer',
+    guarantee4Desc:
+      'Alle optagelser (.wav) og udskrifter (.json) ligger i din egen valgte mappe på computeren og slettes permanent fra disken, når du sletter dem i appen.',
+    offlineReadyStatus: 'Offline-status: Klar til 100% offline brug uden internet',
+    offlineMissingModels: 'Offline-status: Hent modeller under Lokale AI Modeller for 100% offline brug',
   },
   es: {
     speechToTextModel: 'Modelo de Voz a Texto',
@@ -479,6 +515,24 @@ export const TRANSLATIONS: Record<UILanguage, Record<string, string>> = {
     retranscribeBtn: 'Re-transcribir y Traducir',
     retranscribeOnSave: 'Re-transcribir y traducir el audio con los modelos seleccionados',
     sessionModelsHeader: 'Modelos IA e Idioma de Salida para esta sesión',
+    privacyGuaranteeBadge: '100% Local y Offline',
+    privacyGuaranteeTitle: 'Garantía de Privacidad y Uso 100% Offline',
+    privacyGuaranteeSub:
+      'Garantía técnica de que sus grabaciones y transcripciones nunca salen de su equipo.',
+    guarantee1Title: '1. Ningún dato sale jamás de la aplicación',
+    guarantee1Desc:
+      'Todo el audio, las voces, transcripciones y traducciones se procesan únicamente en su equipo local y nunca se envían a servidores externos.',
+    guarantee2Title: '2. Funciona 100% sin conexión a Internet',
+    guarantee2Desc:
+      'Mientras tenga los modelos descargados localmente, Wisp funciona completamente sin conexión a internet.',
+    guarantee3Title: '3. Bloqueo de Red Local (127.0.0.1) y Cero Telemetría',
+    guarantee3Desc:
+      'Bloqueado técnicamente mediante filtro de red Electron y CSP para comunicarse solo con 127.0.0.1 sin telemetría.',
+    guarantee4Title: '4. Control total de sus archivos locales',
+    guarantee4Desc:
+      'Todas las grabaciones y sesiones se guardan en su carpeta local elegida.',
+    offlineReadyStatus: 'Estado Offline: Listo para uso 100% sin internet',
+    offlineMissingModels: 'Estado Offline: Descargue modelos para uso sin internet',
   },
   de: {
     speechToTextModel: 'Sprache-zu-Text Modell',
@@ -626,6 +680,24 @@ export const TRANSLATIONS: Record<UILanguage, Record<string, string>> = {
     retranscribeBtn: 'Neu transkribieren & übersetzen',
     retranscribeOnSave: 'Audio mit ausgewählten Modellen neu transkribieren & übersetzen',
     sessionModelsHeader: 'KI-Modelle & Ausgabesprache für diese Sitzung',
+    privacyGuaranteeBadge: '100% Lokal & Offline',
+    privacyGuaranteeTitle: 'Datenschutz- & 100% Offline-Garantie',
+    privacyGuaranteeSub:
+      'Technische Garantie, dass Ihre Audiodaten und Transkripte niemals Ihren Computer verlassen.',
+    guarantee1Title: '1. Keine Daten verlassen jemals diese App',
+    guarantee1Desc:
+      'Alle Audioaufnahmen, Stimmprofile, Transkripte und Übersetzungen werden ausschließlich lokal auf Ihrem Gerät verarbeitet.',
+    guarantee2Title: '2. Funktioniert zu 100% Offline ohne Internet',
+    guarantee2Desc:
+      'Sobald Ihre gewählten KI-Modelle lokal gespeichert sind, funktioniert Wisp komplett ohne Internetverbindung.',
+    guarantee3Title: '3. Technische Netzwerksperre (127.0.0.1) & Null Telemetrie',
+    guarantee3Desc:
+      'Durch Electron-Netzwerkfilter und CSP technisch auf 127.0.0.1 beschränkt, jegliche Telemetrie ist deaktiviert.',
+    guarantee4Title: '4. Volle Kontrolle über lokale Dateien',
+    guarantee4Desc:
+      'Alle Aufnahmen werden nur in Ihrem selbst gewählten lokalen Ordner gespeichert.',
+    offlineReadyStatus: 'Offline-Status: Bereit für 100% Offline-Betrieb',
+    offlineMissingModels: 'Offline-Status: Bitte Modelle für Offline-Betrieb laden',
   },
 };
 

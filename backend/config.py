@@ -40,7 +40,11 @@ MODELS_DIR.mkdir(parents=True, exist_ok=True)
 SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Set HuggingFace cache to our local models directory so everything stays self-contained
+# and strictly disable all external telemetry/tracking
 os.environ["HF_HOME"] = str(MODELS_DIR / "hf_cache")
+os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
+os.environ["DO_NOT_TRACK"] = "1"
+os.environ["DISABLE_TELEMETRY"] = "1"
 
 
 def set_storage_path(new_path_str: str) -> Path:

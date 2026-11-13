@@ -14,6 +14,7 @@ import sentencepiece as spm
 import sherpa_onnx
 from tokenizers import Tokenizer
 
+import config as app_config
 from config import (
     DEFAULT_TRANSLATION_MODEL,
     DEFAULT_WHISPER_MODEL,
@@ -22,10 +23,10 @@ from config import (
 )
 from diarization import LocalSpeakerDiarizer
 from models_manager import (
-    ensure_nllb_model,
-    ensure_opus_pair_model,
-    ensure_whisper_model,
+    get_opus_pair_dir,
     is_nllb_model_downloaded,
+    is_opus_pair_downloaded,
+    resolve_local_whisper_model,
 )
 from session_store import (
     SAMPLE_RATE,
@@ -121,7 +122,11 @@ class OpusPairRunner:
 
     def __init__(self, pair_key: str):
         self.pair_key = pair_key
-        model_dir = ensure_opus_pair_model(pair_key)
+        if not is_opus_pair_downloaded(pair_key):
+            raise FileNotFoundError(
+                f"Local OPUS-MT model '{pair_key}' is not downloaded on disk."
+            )
+        model_dir = get_opus_pair_dir(pair_key)
         cfg = json.loads((model_dir / "config.json").read_text(encoding="utf-8"))
         self.eos_token_id = int(cfg.get("eos_token_id", 0))
         self.decoder_start_token_id = int(cfg.get("decoder_start_token_id", 58929))
@@ -249,7 +254,9 @@ class LocalONNXTranslationEngine:
             ):
                 return True
             try:
-                model_dir = ensure_nllb_model()
+                if not is_nllb_model_downloaded():
+                    return False
+                model_dir = app_config.NLLB_LOCAL_DIR
                 tok_path = model_dir / "tokenizer.json"
                 enc_path = model_dir / "onnx" / "encoder_model_quantized.onnx"
                 dec_path = model_dir / "onnx" / "decoder_model_quantized.onnx"
@@ -393,7 +400,7 @@ class LocalSpeechPipeline:
             if model_id in self._lang_detectors:
                 return self._lang_detectors[model_id]
             try:
-                paths = ensure_whisper_model(model_id)
+                paths = resolve_local_whisper_model(model_id)
                 slid_cfg = sherpa_onnx.SpokenLanguageIdentificationConfig(
                     whisper=sherpa_onnx.SpokenLanguageIdentificationWhisperConfig(
                         encoder=str(paths["encoder"]),
@@ -441,7 +448,7 @@ class LocalSpeechPipeline:
             if key in self._recognizers:
                 return self._recognizers[key]
 
-            paths = ensure_whisper_model(model_id)
+            paths = resolve_local_whisper_model(model_id)
             rec = sherpa_onnx.OfflineRecognizer.from_whisper(
                 encoder=str(paths["encoder"]),
                 decoder=str(paths["decoder"]),
@@ -612,7 +619,7 @@ class LocalSpeechPipeline:
             progress_cb(
                 f"Preparing local Whisper ONNX ({session.whisper_model}) model...", 20
             )
-        ensure_whisper_model(session.whisper_model)
+        resolve_local_whisper_model(session.whisper_model)
 
         if progress_cb:
             progress_cb("Detecting speech segments across recording...", 35)
@@ -787,7 +794,7 @@ class LocalSpeechPipeline:
                 f"Loading Whisper ({session.whisper_model}) & Translation ({session.translation_model})...",
                 10,
             )
-        ensure_whisper_model(session.whisper_model)
+        resolve_local_whisper_model(session.whisper_model)
 
         total = len(session.segments)
         for idx, seg in enumerate(session.segments):
@@ -838,7 +845,7 @@ class LocalSpeechPipeline:
                     self._recognizers.pop(k, None)
                 self._lang_detectors.pop(model_id, None)
             elif model_type in ("opus", "opus-mt-da-en", "translation"):
-                self.translator._opus_runners.clear()
+                self.translator._opus_cache.clear()
             elif model_type in ("nllb", "nllb-200-600M"):
                 self.translator._nllb_encoder = None
                 self.translator._nllb_decoder = None

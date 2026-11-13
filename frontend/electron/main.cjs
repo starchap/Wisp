@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, session, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
@@ -125,6 +125,23 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  // Technical Privacy Guarantee: Block any outbound network requests from the UI renderer
+  // except local loopback (127.0.0.1 / localhost) and local file/blob/data protocols.
+  session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
+    const url = details.url || '';
+    const isAllowedLocal =
+      url.startsWith('file://') ||
+      url.startsWith('data:') ||
+      url.startsWith('blob:') ||
+      url.startsWith('devtools://') ||
+      url.startsWith('chrome-extension://') ||
+      url.startsWith('http://127.0.0.1:') ||
+      url.startsWith('ws://127.0.0.1:') ||
+      url.startsWith('http://localhost:') ||
+      url.startsWith('ws://localhost:');
+    callback({ cancel: !isAllowedLocal });
+  });
+
   if (process.env.SKIP_BACKEND_SPAWN !== '1') {
     startPythonBackend();
   }
