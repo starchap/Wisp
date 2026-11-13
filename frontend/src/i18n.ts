@@ -167,6 +167,11 @@ export const TRANSLATIONS: Record<UILanguage, Record<string, string>> = {
     startUsingWisp: 'Start Using Wisp',
     runSetupWizard: 'Setup Wizard',
     changeFolder: 'Change Folder...',
+    deleteModel: 'Delete',
+    deleteModelTooltip: 'Delete model from local storage',
+    retranscribeBtn: 'Re-transcribe & Translate',
+    retranscribeOnSave: 'Re-transcribe & translate audio with selected models',
+    sessionModelsHeader: 'AI Models & Output Language for this Session',
   },
   da: {
     // Top HeaderBar
@@ -322,6 +327,11 @@ export const TRANSLATIONS: Record<UILanguage, Record<string, string>> = {
     startUsingWisp: 'Start Wisp',
     runSetupWizard: 'Opsætningsguide',
     changeFolder: 'Skift mappe...',
+    deleteModel: 'Slet',
+    deleteModelTooltip: 'Slet model fra lokal lagring',
+    retranscribeBtn: 'Transskriber & oversæt på ny',
+    retranscribeOnSave: 'Transskriber & oversæt lyden på ny med valgte modeller',
+    sessionModelsHeader: 'AI-Modeller & Outputsprog for denne session',
   },
   es: {
     speechToTextModel: 'Modelo de Voz a Texto',
@@ -464,6 +474,11 @@ export const TRANSLATIONS: Record<UILanguage, Record<string, string>> = {
     startUsingWisp: 'Empezar a usar Wisp',
     runSetupWizard: 'Asistente de Configuración',
     changeFolder: 'Cambiar carpeta...',
+    deleteModel: 'Eliminar',
+    deleteModelTooltip: 'Eliminar modelo del almacenamiento local',
+    retranscribeBtn: 'Re-transcribir y Traducir',
+    retranscribeOnSave: 'Re-transcribir y traducir el audio con los modelos seleccionados',
+    sessionModelsHeader: 'Modelos IA e Idioma de Salida para esta sesión',
   },
   de: {
     speechToTextModel: 'Sprache-zu-Text Modell',
@@ -606,6 +621,11 @@ export const TRANSLATIONS: Record<UILanguage, Record<string, string>> = {
     startUsingWisp: 'Wisp starten',
     runSetupWizard: 'Einrichtungsassistent',
     changeFolder: 'Ordner ändern...',
+    deleteModel: 'Löschen',
+    deleteModelTooltip: 'Modell vom lokalen Speicher löschen',
+    retranscribeBtn: 'Neu transkribieren & übersetzen',
+    retranscribeOnSave: 'Audio mit ausgewählten Modellen neu transkribieren & übersetzen',
+    sessionModelsHeader: 'KI-Modelle & Ausgabesprache für diese Sitzung',
   },
 };
 

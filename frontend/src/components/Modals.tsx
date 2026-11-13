@@ -19,15 +19,18 @@ import {
   Moon,
   Palette,
   Radio,
+  RefreshCw,
   Shield,
   Sparkles,
   Sun,
+  Trash2,
   Upload,
   Users,
   Volume2,
   X,
 } from 'lucide-react';
 import {
+  deleteLocalModel,
   fetchExportText,
   triggerModelDownload,
   updateStoragePath,
@@ -69,6 +72,7 @@ interface SettingsModalProps {
   isBusy: boolean;
   onSelectWhisperModel?: (modelId: string) => void;
   onSelectTranslationModel?: (modelId: string) => void;
+  onModelsStatusUpdated?: (status: ModelsStatus) => void;
   onOpenOnboardingWizard?: () => void;
   onClose: () => void;
 }
@@ -91,6 +95,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   isBusy,
   onSelectWhisperModel,
   onSelectTranslationModel,
+  onModelsStatusUpdated,
   onOpenOnboardingWizard,
   onClose,
 }) => {
@@ -413,19 +418,38 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           Sherpa-ONNX to cluster distinct voices.
                         </p>
 
-                        <div className="pt-1 flex items-center justify-between">
+                        <div className="pt-1 flex items-center justify-between gap-2">
                           {modelsStatus.speaker_diarization.downloaded ? (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-400 text-xs font-semibold border border-emerald-500/30">
-                              <CheckCircle2 className="w-3.5 h-3.5" />
-                              Ready Offline
-                            </span>
+                            <div className="flex items-center justify-between w-full gap-2">
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-400 text-xs font-semibold border border-emerald-500/30">
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                                {t('readyOffline')}
+                              </span>
+                              <button
+                                type="button"
+                                disabled={isBusy}
+                                title={t('deleteModelTooltip')}
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  try {
+                                    const next =
+                                      await deleteLocalModel('speaker');
+                                    onModelsStatusUpdated?.(next);
+                                  } catch (_) {}
+                                }}
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-800/80 hover:bg-rose-600/20 text-slate-400 hover:text-rose-400 border border-slate-700/80 hover:border-rose-500/40 text-[11px] font-semibold disabled:opacity-40 transition"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                                <span>{t('deleteModel')}</span>
+                              </button>
+                            </div>
                           ) : (
                             <button
                               disabled={isBusy}
                               onClick={() => triggerModelDownload('speaker')}
                               className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-semibold"
                             >
-                              Download
+                              {t('download')}
                             </button>
                           )}
                         </div>
@@ -481,10 +505,44 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                 </div>
 
                                 {wm.downloaded ? (
-                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-400 text-[11px] font-semibold border border-emerald-500/30 shrink-0">
-                                    <CheckCircle2 className="w-3 h-3" />
-                                    Downloaded
-                                  </span>
+                                  <div className="flex items-center gap-1.5 shrink-0">
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-400 text-[11px] font-semibold border border-emerald-500/30">
+                                      <CheckCircle2 className="w-3 h-3" />
+                                      {t('downloaded')}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      disabled={isBusy}
+                                      title={t('deleteModelTooltip')}
+                                      onClick={async (e) => {
+                                        e.stopPropagation();
+                                        try {
+                                          const next = await deleteLocalModel(
+                                            'whisper',
+                                            wm.id
+                                          );
+                                          onModelsStatusUpdated?.(next);
+                                          if (
+                                            isSelected &&
+                                            onSelectWhisperModel
+                                          ) {
+                                            const fallback =
+                                              next.whisper_models.find(
+                                                (w) =>
+                                                  w.downloaded && w.id !== wm.id
+                                              );
+                                            if (fallback) {
+                                              onSelectWhisperModel(fallback.id);
+                                            }
+                                          }
+                                        } catch (_) {}
+                                      }}
+                                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-800/80 hover:bg-rose-600/20 text-slate-400 hover:text-rose-400 border border-slate-700/80 hover:border-rose-500/40 text-[11px] font-semibold disabled:opacity-40 transition"
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                      <span>{t('deleteModel')}</span>
+                                    </button>
+                                  </div>
                                 ) : (
                                   <button
                                     disabled={isBusy}
@@ -494,7 +552,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                     }}
                                     className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-blue-600 disabled:opacity-50 text-white text-[11px] font-semibold border border-slate-700 shrink-0 transition"
                                   >
-                                    Download (~{wm.size_mb} MB)
+                                    {t('download')} (~{wm.size_mb} MB)
                                   </button>
                                 )}
                               </div>
@@ -559,10 +617,49 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                 </div>
 
                                 {tm.downloaded ? (
-                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-400 text-[11px] font-semibold border border-emerald-500/30 shrink-0">
-                                    <CheckCircle2 className="w-3 h-3" />
-                                    Ready Offline
-                                  </span>
+                                  <div className="flex items-center gap-1.5 shrink-0">
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-400 text-[11px] font-semibold border border-emerald-500/30">
+                                      <CheckCircle2 className="w-3 h-3" />
+                                      {t('readyOffline')}
+                                    </span>
+                                    {tm.id !== 'whisper-native' && (
+                                      <button
+                                        type="button"
+                                        disabled={isBusy}
+                                        title={t('deleteModelTooltip')}
+                                        onClick={async (e) => {
+                                          e.stopPropagation();
+                                          try {
+                                            const next = await deleteLocalModel(
+                                              'translation',
+                                              tm.id
+                                            );
+                                            onModelsStatusUpdated?.(next);
+                                            if (
+                                              isSelected &&
+                                              onSelectTranslationModel
+                                            ) {
+                                              const fallback = (
+                                                next.translation_models || []
+                                              ).find(
+                                                (m) =>
+                                                  m.downloaded && m.id !== tm.id
+                                              );
+                                              if (fallback) {
+                                                onSelectTranslationModel(
+                                                  fallback.id
+                                                );
+                                              }
+                                            }
+                                          } catch (_) {}
+                                        }}
+                                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-800/80 hover:bg-rose-600/20 text-slate-400 hover:text-rose-400 border border-slate-700/80 hover:border-rose-500/40 text-[11px] font-semibold disabled:opacity-40 transition"
+                                      >
+                                        <Trash2 className="w-3 h-3" />
+                                        <span>{t('deleteModel')}</span>
+                                      </button>
+                                    )}
+                                  </div>
                                 ) : (
                                   <button
                                     disabled={isBusy}
@@ -576,7 +673,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                     }}
                                     className="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-[11px] font-semibold shrink-0 transition"
                                   >
-                                    Download (~{tm.size_mb} MB)
+                                    {t('download')} (~{tm.size_mb} MB)
                                   </button>
                                 )}
                               </div>
@@ -1091,11 +1188,21 @@ interface SessionDialogModalProps {
   initialTitle?: string;
   initialSessionType?: 'file' | 'live';
   currentSourceFileName?: string;
+  modelsStatus?: ModelsStatus | null;
+  languages?: SupportedLanguage[];
+  initialWhisperModel?: string;
+  initialTranslationModel?: string;
+  initialTargetLanguage?: string;
+  hasExistingAudio?: boolean;
   onSave: (params: {
     title: string;
     sessionType: 'file' | 'live';
     file: File | null;
     expectedSpeakers?: number;
+    whisperModel: string;
+    translationModel: string;
+    targetLanguage: string;
+    retranscribe?: boolean;
   }) => void;
   onClose: () => void;
 }
@@ -1106,6 +1213,12 @@ export const SessionDialogModal: React.FC<SessionDialogModalProps> = ({
   initialTitle = 'Sales Meeting',
   initialSessionType = 'file',
   currentSourceFileName = '',
+  modelsStatus,
+  languages = [],
+  initialWhisperModel = 'small',
+  initialTranslationModel = 'opus-mt-da-en',
+  initialTargetLanguage = 'en',
+  hasExistingAudio = false,
   onSave,
   onClose,
 }) => {
@@ -1116,6 +1229,14 @@ export const SessionDialogModal: React.FC<SessionDialogModalProps> = ({
   );
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [expectedSpeakers, setExpectedSpeakers] = useState<string>('0');
+  const [whisperModel, setWhisperModel] = useState<string>(initialWhisperModel);
+  const [translationModel, setTranslationModel] = useState<string>(
+    initialTranslationModel
+  );
+  const [targetLanguage, setTargetLanguage] = useState<string>(
+    initialTargetLanguage
+  );
+  const [retranscribe, setRetranscribe] = useState<boolean>(false);
   const [isDragging, setIsDragging] = useState(false);
 
   useEffect(() => {
@@ -1124,12 +1245,43 @@ export const SessionDialogModal: React.FC<SessionDialogModalProps> = ({
       setSessionType(initialSessionType || 'file');
       setSelectedFile(null);
       setExpectedSpeakers('0');
+      setWhisperModel(initialWhisperModel || 'small');
+      setTranslationModel(initialTranslationModel || 'opus-mt-da-en');
+      setTargetLanguage(initialTargetLanguage || 'en');
+      setRetranscribe(false);
     }
-  }, [isOpen, initialTitle, initialSessionType]);
+  }, [
+    isOpen,
+    initialTitle,
+    initialSessionType,
+    initialWhisperModel,
+    initialTranslationModel,
+    initialTargetLanguage,
+  ]);
 
   if (!isOpen) return null;
 
   const isEdit = mode === 'edit';
+  const downloadedWhispers =
+    modelsStatus?.whisper_models.filter((w) => w.downloaded) || [];
+  const whisperOptions =
+    downloadedWhispers.length > 0
+      ? downloadedWhispers
+      : modelsStatus?.whisper_models || [
+          { id: 'tiny', name: 'Whisper Tiny', size_mb: 110, description: '', downloaded: true },
+          { id: 'small', name: 'Whisper Small', size_mb: 610, description: '', downloaded: true },
+        ];
+
+  const downloadedTranslators =
+    (modelsStatus?.translation_models || []).filter((tm) => tm.downloaded);
+  const translatorOptions =
+    downloadedTranslators.length > 0
+      ? downloadedTranslators
+      : modelsStatus?.translation_models || [
+          { id: 'opus-mt-da-en', name: 'OPUS-MT (DA → EN)', size_mb: 195, description: '', downloaded: true },
+        ];
+
+  const outputLanguages = languages.filter((l) => l.code !== 'auto');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1140,6 +1292,10 @@ export const SessionDialogModal: React.FC<SessionDialogModalProps> = ({
       sessionType,
       file: sessionType === 'file' ? selectedFile : null,
       expectedSpeakers: spkCount > 0 ? spkCount : undefined,
+      whisperModel,
+      translationModel,
+      targetLanguage,
+      retranscribe: isEdit && hasExistingAudio && !selectedFile ? retranscribe : false,
     });
     onClose();
   };
@@ -1170,7 +1326,7 @@ export const SessionDialogModal: React.FC<SessionDialogModalProps> = ({
         </div>
 
         {/* Body */}
-        <div className="p-6 space-y-5">
+        <div className="p-6 space-y-4 max-h-[75vh] overflow-y-auto">
           {/* 1. Session Type Selector (Locked when editing an existing session) */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
@@ -1357,6 +1513,103 @@ export const SessionDialogModal: React.FC<SessionDialogModalProps> = ({
               </div>
             </div>
           )}
+
+          {/* 4. AI Models & Output Language Selection for this Session */}
+          <div className="rounded-xl bg-slate-950/60 border border-slate-800 p-3.5 space-y-3">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+              <Cpu className="w-3.5 h-3.5 text-blue-400" />
+              <span>{t('sessionModelsHeader')}</span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <div className="space-y-1">
+                <label className="text-[11px] font-medium text-slate-400">
+                  {t('speechToTextModel')}
+                </label>
+                <select
+                  value={whisperModel}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setWhisperModel(val);
+                    if (isEdit && hasExistingAudio) {
+                      setRetranscribe(true);
+                    }
+                  }}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-semibold focus:outline-none focus:border-blue-500"
+                >
+                  {whisperOptions.map((wm) => (
+                    <option key={wm.id} value={wm.id}>
+                      {wm.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[11px] font-medium text-slate-400">
+                  {t('localTranslationModel')}
+                </label>
+                <select
+                  value={translationModel}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setTranslationModel(val);
+                    if (isEdit && hasExistingAudio) {
+                      setRetranscribe(true);
+                    }
+                  }}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-semibold focus:outline-none focus:border-emerald-500"
+                >
+                  {translatorOptions.map((tm) => (
+                    <option key={tm.id} value={tm.id}>
+                      {tm.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {outputLanguages.length > 0 && (
+              <div className="flex items-center justify-between pt-1 border-t border-slate-800/80">
+                <span className="text-[11px] text-slate-400 font-medium flex items-center gap-1.5">
+                  <Globe className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>{t('outputLanguage')}:</span>
+                </span>
+                <select
+                  value={targetLanguage}
+                  onChange={(e) => {
+                    setTargetLanguage(e.target.value);
+                    if (isEdit && hasExistingAudio) {
+                      setRetranscribe(true);
+                    }
+                  }}
+                  className="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white font-semibold focus:outline-none focus:border-indigo-500"
+                >
+                  {outputLanguages.map((lang) => (
+                    <option key={lang.code} value={lang.code}>
+                      {lang.name} ({lang.code.toUpperCase()})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* Re-transcribe & Translate checkbox when editing a session with existing audio */}
+            {isEdit && hasExistingAudio && !selectedFile && (
+              <label className="flex items-center gap-2.5 pt-2 border-t border-slate-800/80 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={retranscribe}
+                  onChange={(e) => setRetranscribe(e.target.checked)}
+                  className="w-4 h-4 rounded border-slate-600 text-blue-600 focus:ring-blue-500"
+                />
+                <span className="text-xs font-semibold text-blue-300 flex items-center gap-1.5">
+                  <RefreshCw className="w-3.5 h-3.5 text-blue-400" />
+                  <span>{t('retranscribeOnSave')}</span>
+                </span>
+              </label>
+            )}
+          </div>
         </div>
 
         {/* Footer */}

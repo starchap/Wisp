@@ -748,3 +748,90 @@ class LocalSpeechPipeline:
 
         self.store.save_session(session)
         return session.segments
+
+    def retranscribe_and_translate_all_segments(
+        self,
+        session: MeetingSession,
+        progress_cb: Optional[Callable[[str, int], None]] = None,
+    ) -> MeetingSession:
+        """
+        Re-transcribe and re-translate all existing segments of a session using
+        its current `whisper_model`, `translation_model`, and `target_language`
+        (preserving speaker profiles, names, and per-speaker spoken languages).
+        """
+        if not session.segments:
+            audio_path = self.store.get_audio_path(session.id)
+            if audio_path.exists():
+                raw = audio_path.read_bytes()
+                audio_16k = self.store.read_audio_slice(
+                    session.id, 0.0, max(1.0, session.duration or 3600.0)
+                )
+                if len(audio_16k) > 0:
+                    return self.process_uploaded_file(
+                        session, audio_16k, progress_cb=progress_cb
+                    )
+            return session
+
+        if progress_cb:
+            progress_cb(
+                f"Loading Whisper ({session.whisper_model}) & Translation ({session.translation_model})...",
+                10,
+            )
+        ensure_whisper_model(session.whisper_model)
+
+        total = len(session.segments)
+        for idx, seg in enumerate(session.segments):
+            if progress_cb:
+                pct = 15 + int(80 * (idx + 1) / max(1, total))
+                progress_cb(
+                    f"Re-transcribing & translating segment {idx + 1}/{total} ({session.whisper_model})...",
+                    pct,
+                )
+
+            clip = self.store.read_audio_slice(session.id, seg.start, seg.end)
+            if len(clip) < int(SAMPLE_RATE * 0.25):
+                continue
+
+            spk = session.speakers.get(seg.speaker_id)
+            forced_lang = (
+                spk.language if (spk and spk.language != "auto") else None
+            )
+            detected_lang, orig_text, trans_text, conf = (
+                self.transcribe_and_translate_clip(
+                    clip,
+                    forced_language=forced_lang,
+                    target_language=session.target_language,
+                    model_id=session.whisper_model,
+                    translation_model=session.translation_model,
+                )
+            )
+            if orig_text:
+                seg.source_language = detected_lang
+                seg.original_text = orig_text
+                seg.translated_text = trans_text
+                seg.target_language = session.target_language
+                seg.confidence = round(conf, 3)
+
+        self.store.save_session(session)
+        if progress_cb:
+            progress_cb("Completed re-transcription & translation!", 100)
+        return session
+
+    def evict_model_cache(self, model_type: str, model_id: str = "") -> None:
+        """Release ONNX Runtime sessions from memory before deleting model files on disk."""
+        with self._lock:
+            if model_type == "whisper":
+                keys_to_remove = [
+                    k for k in self._recognizers if k[0] == model_id
+                ]
+                for k in keys_to_remove:
+                    self._recognizers.pop(k, None)
+                self._lang_detectors.pop(model_id, None)
+            elif model_type in ("opus", "opus-mt-da-en", "translation"):
+                self.translator._opus_runners.clear()
+            elif model_type in ("nllb", "nllb-200-600M"):
+                self.translator._nllb_encoder = None
+                self.translator._nllb_decoder = None
+                self.translator._nllb_tokenizer = None
+            elif model_type == "speaker":
+                self.diarizer._extractor = None

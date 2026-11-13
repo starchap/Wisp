@@ -6,6 +6,7 @@ Handles downloading, caching, and verifying local AI models:
 3. Meta NLLB-200-distilled-600M (ONNX INT8) for 200-language Any-to-Any Translation
 4. Sherpa-ONNX 3D-Speaker ONNX model for Speaker Diarization / Voice Embeddings
 """
+import shutil
 import urllib.request
 from pathlib import Path
 from typing import Dict, List
@@ -180,6 +181,29 @@ def ensure_nllb_model() -> Path:
             local_dir=str(config.NLLB_LOCAL_DIR),
         )
     return config.NLLB_LOCAL_DIR
+
+
+def delete_local_model(model_type: str, model_id: str = "") -> None:
+    """Delete a downloaded local AI model from disk to free up storage."""
+    if model_type == "whisper":
+        target_dir = get_whisper_model_dir(model_id)
+        if target_dir.exists():
+            shutil.rmtree(target_dir, ignore_errors=True)
+    elif model_type in ("opus", "opus-mt-da-en") or (
+        model_type == "translation" and model_id == "opus-mt-da-en"
+    ):
+        for pair in ("da-en", "en-da"):
+            d = get_opus_pair_dir(pair)
+            if d.exists():
+                shutil.rmtree(d, ignore_errors=True)
+    elif model_type in ("nllb", "nllb-200-600M") or (
+        model_type == "translation" and model_id == "nllb-200-600M"
+    ):
+        if config.NLLB_LOCAL_DIR.exists():
+            shutil.rmtree(config.NLLB_LOCAL_DIR, ignore_errors=True)
+    elif model_type == "speaker":
+        if config.SPEAKER_EMBEDDING_MODEL_PATH.exists():
+            config.SPEAKER_EMBEDDING_MODEL_PATH.unlink(missing_ok=True)
 
 
 def get_models_status() -> Dict:

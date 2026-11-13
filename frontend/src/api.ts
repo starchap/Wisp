@@ -59,6 +59,36 @@ export async function triggerModelDownload(
   if (!res.ok) throw new Error('Failed to start model download');
 }
 
+export async function deleteLocalModel(
+  modelType: 'whisper' | 'speaker' | 'opus' | 'nllb' | 'translation',
+  modelId?: string
+): Promise<ModelsStatus> {
+  const res = await fetch(`${API_BASE}/api/models/delete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model_type: modelType,
+      model_id: modelId,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Delete failed' }));
+    throw new Error(err.detail || 'Failed to delete model');
+  }
+  const data = await res.json();
+  return data.models_status;
+}
+
+export async function reprocessSessionAudio(sessionId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/reprocess`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Reprocess failed' }));
+    throw new Error(err.detail || 'Failed to reprocess session audio');
+  }
+}
+
 export async function fetchSessions(): Promise<SessionSummary[]> {
   const res = await fetch(`${API_BASE}/api/sessions`);
   if (!res.ok) throw new Error('Failed to list sessions');
@@ -106,6 +136,7 @@ export async function updateSession(
     whisper_model?: string;
     translation_model?: string;
     retranslate_existing?: boolean;
+    retranscribe_existing?: boolean;
   }
 ): Promise<MeetingSession> {
   const res = await fetch(`${API_BASE}/api/sessions/${sessionId}`, {

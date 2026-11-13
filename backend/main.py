@@ -37,6 +37,7 @@ from config import (
     set_storage_path,
 )
 from models_manager import (
+    delete_local_model,
     ensure_nllb_model,
     ensure_opus_pair_model,
     ensure_speaker_model,
@@ -196,6 +197,31 @@ def api_download_model(req: DownloadModelRequest):
     return {"status": "started"}
 
 
+class DeleteModelRequest(BaseModel):
+    model_type: str  # "whisper", "speaker", "opus", "nllb", or "translation"
+    model_id: Optional[str] = ""
+
+
+@app.post("/api/models/delete")
+def api_delete_model(req: DeleteModelRequest):
+    """Delete a downloaded local AI model from disk (only triggered from Settings)."""
+    try:
+        pipeline.evict_model_cache(req.model_type, req.model_id or "")
+        delete_local_model(req.model_type, req.model_id or "")
+        status = get_models_status()
+        broadcast_event(
+            "model_progress",
+            {
+                "status": f"Deleted model '{req.model_id or req.model_type}' from local storage.",
+                "busy": False,
+                "models_status": status,
+            },
+        )
+        return status
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Could not delete model: {exc}")
+
+
 @app.get("/api/devices")
 def api_list_devices():
     return list_audio_devices()
@@ -254,6 +280,38 @@ class UpdateSessionRequest(BaseModel):
     whisper_model: Optional[str] = None
     translation_model: Optional[str] = None
     retranslate_existing: bool = True
+    retranscribe_existing: bool = False
+
+
+def _trigger_session_reprocess_async(session_id: str) -> None:
+    session = store.get_session(session_id)
+    if not session:
+        return
+
+    def _progress(msg: str, pct: int):
+        broadcast_event(
+            "upload_progress",
+            {"session_id": session_id, "message": msg, "percent": pct},
+        )
+
+    def _worker():
+        try:
+            pipeline.retranscribe_and_translate_all_segments(
+                session, progress_cb=_progress
+            )
+            broadcast_event("session_updated", session.to_dict())
+        except Exception as exc:
+            broadcast_event(
+                "upload_progress",
+                {
+                    "session_id": session_id,
+                    "message": f"Reprocess error: {exc}",
+                    "percent": 100,
+                    "error": str(exc),
+                },
+            )
+
+    threading.Thread(target=_worker, daemon=True).start()
 
 
 @app.patch("/api/sessions/{session_id}")
@@ -263,10 +321,12 @@ def api_update_session(session_id: str, req: UpdateSessionRequest):
         raise HTTPException(status_code=404, detail="Session not found")
 
     retranslate_needed = False
+    whisper_changed = False
     if req.title is not None:
         session.title = req.title
-    if req.whisper_model is not None:
+    if req.whisper_model is not None and req.whisper_model != session.whisper_model:
         session.whisper_model = req.whisper_model
+        whisper_changed = True
     if req.translation_model is not None and req.translation_model != session.translation_model:
         session.translation_model = req.translation_model
         retranslate_needed = True
@@ -276,11 +336,25 @@ def api_update_session(session_id: str, req: UpdateSessionRequest):
 
     store.save_session(session)
 
-    if retranslate_needed and req.retranslate_existing and session.segments:
+    if (req.retranscribe_existing or whisper_changed) and (
+        session.segments or store.get_audio_path(session_id).exists()
+    ):
+        _trigger_session_reprocess_async(session_id)
+    elif retranslate_needed and req.retranslate_existing and session.segments:
         pipeline.retranslate_all_segments(session)
 
     broadcast_event("session_updated", session.to_dict())
     return session.to_dict()
+
+
+@app.post("/api/sessions/{session_id}/reprocess")
+def api_reprocess_session(session_id: str):
+    """Re-run Speech-to-Text transcription and translation on a session's recorded audio."""
+    session = store.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    _trigger_session_reprocess_async(session_id)
+    return {"status": "reprocessing", "session_id": session_id}
 
 
 @app.get("/api/sessions/{session_id}/audio")

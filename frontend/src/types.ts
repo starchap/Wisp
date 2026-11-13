@@ -99,6 +99,8 @@ export interface SessionSummary {
   session_type: 'file' | 'live';
   source_file_name?: string;
   target_language: string;
+  whisper_model?: string;
+  translation_model?: string;
   duration: number;
   speaker_count: number;
   segment_count: number;

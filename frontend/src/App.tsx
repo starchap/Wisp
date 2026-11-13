@@ -20,6 +20,7 @@ import {
   fetchSessions,
   getSessionAudioUrl,
   mergeSpeakers,
+  reprocessSessionAudio,
   startLiveCapture,
   stopLiveCapture,
   updateSession,
@@ -155,6 +156,10 @@ export function App() {
     initialTitle?: string;
     initialSessionType?: 'file' | 'live';
     currentSourceFileName?: string;
+    initialWhisperModel?: string;
+    initialTranslationModel?: string;
+    initialTargetLanguage?: string;
+    hasExistingAudio?: boolean;
   }>({
     isOpen: false,
     mode: 'create',
@@ -285,10 +290,23 @@ export function App() {
       initialTitle: `Sales Meeting #${num}`,
       initialSessionType: 'file',
       currentSourceFileName: '',
+      initialWhisperModel:
+        activeSession?.whisper_model || config?.default_whisper_model || 'small',
+      initialTranslationModel:
+        activeSession?.translation_model ||
+        config?.default_translation_model ||
+        'opus-mt-da-en',
+      initialTargetLanguage:
+        defaultOutputLang || activeSession?.target_language || 'en',
+      hasExistingAudio: false,
     });
   };
 
-  const openEditSessionDialog = (s: SessionSummary | MeetingSession) => {
+  const openEditSessionDialog = async (s: SessionSummary | MeetingSession) => {
+    const full =
+      activeSession && activeSession.id === s.id
+        ? activeSession
+        : await fetchSession(s.id).catch(() => null);
     setSessionDialog({
       isOpen: true,
       mode: 'edit',
@@ -296,6 +314,21 @@ export function App() {
       initialTitle: s.title,
       initialSessionType: s.session_type || 'file',
       currentSourceFileName: s.source_file_name || '',
+      initialWhisperModel:
+        full?.whisper_model ||
+        s.whisper_model ||
+        config?.default_whisper_model ||
+        'small',
+      initialTranslationModel:
+        full?.translation_model ||
+        s.translation_model ||
+        config?.default_translation_model ||
+        'opus-mt-da-en',
+      initialTargetLanguage:
+        full?.target_language || s.target_language || defaultOutputLang || 'en',
+      hasExistingAudio:
+        (full ? full.segments.length > 0 || full.duration > 0 : false) ||
+        ('segment_count' in s && (s.segment_count > 0 || s.duration > 0)),
     });
   };
 
@@ -304,13 +337,24 @@ export function App() {
     sessionType: 'file' | 'live';
     file: File | null;
     expectedSpeakers?: number;
+    whisperModel: string;
+    translationModel: string;
+    targetLanguage: string;
+    retranscribe?: boolean;
   }) => {
     if (sessionDialog.mode === 'create') {
       const created = await createSession(
         params.title,
-        defaultOutputLang || activeSession?.target_language || 'en',
-        activeSession?.whisper_model || config?.default_whisper_model || 'tiny',
-        activeSession?.translation_model ||
+        params.targetLanguage ||
+          defaultOutputLang ||
+          activeSession?.target_language ||
+          'en',
+        params.whisperModel ||
+          activeSession?.whisper_model ||
+          config?.default_whisper_model ||
+          'tiny',
+        params.translationModel ||
+          activeSession?.translation_model ||
           config?.default_translation_model ||
           'opus-mt-da-en',
         params.sessionType
@@ -337,7 +381,20 @@ export function App() {
       }
     } else if (sessionDialog.mode === 'edit' && sessionDialog.sessionId) {
       const targetId = sessionDialog.sessionId;
-      const updated = await updateSession(targetId, { title: params.title });
+      const shouldRetranscribe = !params.file && !!params.retranscribe;
+      if (shouldRetranscribe) {
+        setUploadProgress({
+          message: `Re-transcribing & translating with ${params.whisperModel}...`,
+          percent: 8,
+        });
+      }
+      const updated = await updateSession(targetId, {
+        title: params.title,
+        target_language: params.targetLanguage,
+        whisper_model: params.whisperModel,
+        translation_model: params.translationModel,
+        retranscribe_existing: shouldRetranscribe,
+      });
       setActiveSession(updated);
       setSessionsList(await fetchSessions());
 
@@ -439,6 +496,15 @@ export function App() {
           }}
           onChangeWhisperModel={async (modelId) => {
             if (!activeSession) return;
+            if (
+              activeSession.segments.length > 0 &&
+              activeSession.whisper_model !== modelId
+            ) {
+              setUploadProgress({
+                message: `Re-transcribing & translating with ${modelId}...`,
+                percent: 8,
+              });
+            }
             const updated = await updateSession(activeSession.id, {
               whisper_model: modelId,
             });
@@ -589,6 +655,19 @@ export function App() {
             onToggleTranslated={setShowTranslated}
             onPlaySegment={handlePlaySegment}
             onOpenEditSession={() => openEditSessionDialog(activeSession)}
+            onReprocessSession={async () => {
+              if (!activeSession) return;
+              setUploadProgress({
+                message: `Re-transcribing & translating with ${activeSession.whisper_model}...`,
+                percent: 8,
+              });
+              try {
+                await reprocessSessionAudio(activeSession.id);
+              } catch (err: any) {
+                setUploadProgress(null);
+                setErrorBanner(err.message || 'Re-transcribe failed');
+              }
+            }}
             devices={
               config?.audio_devices || { microphones: [], loopbacks: [] }
             }
@@ -657,6 +736,12 @@ export function App() {
         initialTitle={sessionDialog.initialTitle}
         initialSessionType={sessionDialog.initialSessionType}
         currentSourceFileName={sessionDialog.currentSourceFileName}
+        modelsStatus={modelsStatus}
+        languages={config?.languages || []}
+        initialWhisperModel={sessionDialog.initialWhisperModel}
+        initialTranslationModel={sessionDialog.initialTranslationModel}
+        initialTargetLanguage={sessionDialog.initialTargetLanguage}
+        hasExistingAudio={sessionDialog.hasExistingAudio}
         onSave={handleSaveSessionDialog}
         onClose={() =>
           setSessionDialog((prev) => ({ ...prev, isOpen: false }))
@@ -706,6 +791,7 @@ export function App() {
           });
           setActiveSession(updated);
         }}
+        onModelsStatusUpdated={setModelsStatus}
         onOpenOnboardingWizard={() => setIsOnboardingOpen(true)}
         onClose={() => setIsSettingsOpen(false)}
       />

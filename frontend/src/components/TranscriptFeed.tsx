@@ -10,6 +10,7 @@ import {
   Mic,
   Play,
   Radio,
+  RefreshCw,
   Square,
 } from 'lucide-react';
 import { useI18n } from '../i18n';
@@ -29,6 +30,7 @@ interface TranscriptFeedProps {
   onToggleTranslated: (translated: boolean) => void;
   onPlaySegment: (segment: TranscriptSegment) => void;
   onOpenEditSession?: () => void;
+  onReprocessSession?: () => void;
   devices?: {
     microphones: AudioDevice[];
     loopbacks: AudioDevice[];
@@ -107,6 +109,7 @@ export const TranscriptFeed: React.FC<TranscriptFeedProps> = ({
   onToggleTranslated,
   onPlaySegment,
   onOpenEditSession,
+  onReprocessSession,
   devices = { microphones: [], loopbacks: [] },
   selectedLoopback = '',
   selectedMic = '',
@@ -153,23 +156,37 @@ export const TranscriptFeed: React.FC<TranscriptFeedProps> = ({
           )}
 
           {session.segments.length > 0 && (
-            <button
-              type="button"
-              onClick={handleCopyForWord}
-              className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 font-semibold transition ml-2"
-            >
-              {copiedWord ? (
-                <>
-                  <Check className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>{t('copiedForWord')}</span>
-                </>
-              ) : (
-                <>
-                  <Copy className="w-3.5 h-3.5" />
-                  <span>{t('copyForWord')}</span>
-                </>
+            <>
+              <button
+                type="button"
+                onClick={handleCopyForWord}
+                className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 font-semibold transition ml-2"
+              >
+                {copiedWord ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>{t('copiedForWord')}</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5" />
+                    <span>{t('copyForWord')}</span>
+                  </>
+                )}
+              </button>
+
+              {onReprocessSession && !isRecording && (
+                <button
+                  type="button"
+                  onClick={onReprocessSession}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-600/15 hover:bg-blue-600/25 text-blue-300 border border-blue-500/30 font-semibold transition"
+                  title={t('retranscribeOnSave')}
+                >
+                  <RefreshCw className="w-3.5 h-3.5 text-blue-400" />
+                  <span>{t('retranscribeBtn')}</span>
+                </button>
               )}
-            </button>
+            </>
           )}
         </div>
 
