@@ -9,6 +9,12 @@
   Cross-platform desktop application for Windows, macOS, and Linux (Ubuntu &amp; Fedora)
 </p>
 
+<p align="center">
+  <a href="https://github.com/sponsors/starchap">
+    <img src="https://img.shields.io/badge/Sponsor-starchap-%23ea4aaa?logo=githubsponsors&style=for-the-badge" alt="Sponsor on GitHub" />
+  </a>
+</p>
+
 ---
 
 ## Key Features

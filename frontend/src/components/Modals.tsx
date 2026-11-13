@@ -11,6 +11,7 @@ import {
   GitMerge,
   Globe,
   Headphones,
+  Heart,
   Info,
   Languages,
   Loader2,
@@ -946,6 +947,37 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       {modelsStatus.storage_directory || modelsStatus.models_directory}
                     </code>
                   </div>
+                </div>
+
+                {/* GitHub Sponsors Card */}
+                <div className="rounded-2xl bg-slate-950/70 border border-pink-500/30 p-4 flex flex-wrap items-center justify-between gap-4">
+                  <div className="flex items-start gap-3 max-w-md">
+                    <div className="w-9 h-9 rounded-xl bg-pink-500/15 border border-pink-500/35 flex items-center justify-center text-pink-400 shrink-0 mt-0.5">
+                      <Heart className="w-4 h-4 fill-pink-500/30" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-white">
+                        {t('sponsorTitle')}
+                      </h4>
+                      <p className="text-[11px] text-slate-300 leading-relaxed mt-0.5">
+                        {t('sponsorDesc')}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      window.open(
+                        'https://github.com/sponsors/starchap',
+                        '_blank',
+                        'noopener,noreferrer'
+                      )
+                    }
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-pink-600 hover:bg-pink-500 text-white text-xs font-semibold shadow-lg shadow-pink-600/25 transition shrink-0"
+                  >
+                    <Heart className="w-3.5 h-3.5 fill-current" />
+                    <span>{t('sponsorBtn')}</span>
+                  </button>
                 </div>
               </div>
             )}

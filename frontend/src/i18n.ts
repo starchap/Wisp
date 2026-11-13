@@ -190,6 +190,10 @@ export const TRANSLATIONS: Record<UILanguage, Record<string, string>> = {
       'All recordings (.wav) and transcripts (.json) live in your chosen local folder and are permanently removed from disk when deleted.',
     offlineReadyStatus: 'Offline Status: Ready for 100% Internet-Free Operation',
     offlineMissingModels: 'Offline Status: Download models in Local AI Models tab to enable offline use',
+    sponsorTitle: 'Support Wisp Development',
+    sponsorDesc:
+      'Wisp is free, open-source, and 100% private. If Wisp saves you time in meetings, you can support its development via GitHub Sponsors.',
+    sponsorBtn: 'Sponsor on GitHub',
   },
   da: {
     // Top HeaderBar
@@ -368,6 +372,10 @@ export const TRANSLATIONS: Record<UILanguage, Record<string, string>> = {
       'Alle optagelser (.wav) og udskrifter (.json) ligger i din egen valgte mappe på computeren og slettes permanent fra disken, når du sletter dem i appen.',
     offlineReadyStatus: 'Offline-status: Klar til 100% offline brug uden internet',
     offlineMissingModels: 'Offline-status: Hent modeller under Lokale AI Modeller for 100% offline brug',
+    sponsorTitle: 'Støt udviklingen af Wisp',
+    sponsorDesc:
+      'Wisp er gratis, open-source og 100% privat. Hvis Wisp sparer dig tid i møder, kan du støtte projektet via GitHub Sponsors.',
+    sponsorBtn: 'Støt via GitHub Sponsors',
   },
   es: {
     speechToTextModel: 'Modelo de Voz a Texto',
@@ -533,6 +541,10 @@ export const TRANSLATIONS: Record<UILanguage, Record<string, string>> = {
       'Todas las grabaciones y sesiones se guardan en su carpeta local elegida.',
     offlineReadyStatus: 'Estado Offline: Listo para uso 100% sin internet',
     offlineMissingModels: 'Estado Offline: Descargue modelos para uso sin internet',
+    sponsorTitle: 'Apoyar el desarrollo de Wisp',
+    sponsorDesc:
+      'Wisp es gratuito, de código abierto y 100% privado. Puedes apoyar el proyecto mediante GitHub Sponsors.',
+    sponsorBtn: 'Patrocinar en GitHub',
   },
   de: {
     speechToTextModel: 'Sprache-zu-Text Modell',
@@ -698,6 +710,10 @@ export const TRANSLATIONS: Record<UILanguage, Record<string, string>> = {
       'Alle Aufnahmen werden nur in Ihrem selbst gewählten lokalen Ordner gespeichert.',
     offlineReadyStatus: 'Offline-Status: Bereit für 100% Offline-Betrieb',
     offlineMissingModels: 'Offline-Status: Bitte Modelle für Offline-Betrieb laden',
+    sponsorTitle: 'Wisp-Entwicklung unterstützen',
+    sponsorDesc:
+      'Wisp ist kostenlos, Open-Source und 100% privat. Unterstützen Sie die Weiterentwicklung über GitHub Sponsors.',
+    sponsorBtn: 'Auf GitHub sponsern',
   },
 };
 
