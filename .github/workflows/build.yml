@@ -30,7 +30,7 @@ jobs:
           - os: macos-latest
             platform_name: macOS
             dist_script: dist:mac
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             platform_name: Linux-Ubuntu-and-Fedora
             dist_script: dist:linux
 

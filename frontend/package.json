@@ -2,6 +2,7 @@
   "name": "wisp-desktop",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "description": "Wisp — 100% Local AI Multi-Speaker Meeting Transcriber & Translator",
   "author": "starchap",
   "license": "MIT",
@@ -87,6 +88,12 @@
       "category": "AudioVideo;Audio;Utility;",
       "maintainer": "starchap <https://github.com/starchap/Wisp>",
       "synopsis": "100% Offline Local AI Multi-Speaker Meeting Transcriber & Translator"
+    },
+    "rpm": {
+      "fpm": [
+        "--rpm-rpmbuild-define=_build_id_links none",
+        "--rpm-rpmbuild-define=__os_install_post %{nil}"
+      ]
     }
   }
 }
