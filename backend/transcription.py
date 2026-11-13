@@ -551,15 +551,17 @@ class LocalSpeechPipeline:
             e_sample = int(sub_end_rel * SAMPLE_RATE)
             sub_audio = audio_16k[s_sample:e_sample]
 
+            # Match against this session's isolated speaker embeddings without mutating until speech is confirmed
+            embeddings_snapshot = {k: list(v) for k, v in session.embeddings.items()}
             if forced_speaker_id:
                 spk_id = forced_speaker_id
             else:
-                spk_id, session.embeddings = self.diarizer.assign_speaker_online(
-                    sub_audio, session.embeddings
+                spk_id, updated_embeddings = self.diarizer.assign_speaker_online(
+                    sub_audio, embeddings_snapshot
                 )
 
-            speaker_profile = self.store.ensure_speaker(session, spk_id)
-            assigned_lang = speaker_profile.language
+            existing_spk = session.speakers.get(spk_id)
+            assigned_lang = existing_spk.language if existing_spk else "auto"
 
             detected_lang, orig_text, trans_text, confidence = (
                 self.transcribe_and_translate_clip(
@@ -571,8 +573,12 @@ class LocalSpeechPipeline:
                 )
             )
 
-            if not orig_text:
+            if not orig_text or not orig_text.strip(" ()[].,-?!\"'"):
                 continue
+
+            if not forced_speaker_id:
+                session.embeddings = updated_embeddings
+            self.store.ensure_speaker(session, spk_id)
 
             seg_obj = TranscriptSegment(
                 id=uuid.uuid4().hex[:10],
@@ -624,6 +630,8 @@ class LocalSpeechPipeline:
         speaker_ids, centroids = self.diarizer.cluster_segments_batch(
             audio_16k, seg_times, num_speakers=num_speakers
         )
+        # Strictly isolate speakers and segments to this session's audio
+        session.speakers = {}
         session.embeddings = centroids
         session.segments = []
 
@@ -635,12 +643,12 @@ class LocalSpeechPipeline:
                     f"Transcribing & translating segment {idx + 1}/{total}...", pct
                 )
 
-            speaker_profile = self.store.ensure_speaker(session, spk_id)
             clip = audio_16k[int(s_sec * SAMPLE_RATE) : int(e_sec * SAMPLE_RATE)]
 
+            existing_spk = session.speakers.get(spk_id)
             forced_lang = (
-                speaker_profile.language
-                if speaker_profile.language != "auto"
+                existing_spk.language
+                if (existing_spk and existing_spk.language != "auto")
                 else None
             )
             detected_lang, orig_text, trans_text, conf = (
@@ -652,8 +660,10 @@ class LocalSpeechPipeline:
                     translation_model=session.translation_model,
                 )
             )
-            if not orig_text:
+            if not orig_text or not orig_text.strip(" ()[].,-?!\"'"):
                 continue
+
+            self.store.ensure_speaker(session, spk_id)
 
             seg_obj = TranscriptSegment(
                 id=uuid.uuid4().hex[:10],

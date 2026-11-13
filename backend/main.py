@@ -626,6 +626,7 @@ async def api_upload_recording(
     session.segments = []
     session.embeddings = {}
     store.save_session(session)
+    broadcast_event("session_updated", session.to_dict())
 
     def _progress(msg: str, pct: int):
         broadcast_event(

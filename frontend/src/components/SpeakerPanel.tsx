@@ -39,7 +39,21 @@ export const SpeakerPanel: React.FC<SpeakerPanelProps> = ({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
 
-  const speakersList: SpeakerProfile[] = Object.values(session.speakers);
+  const activeSpeakerIdsInSession = new Set(
+    session.segments.map((seg) => seg.speaker_id)
+  );
+  const speakersList: SpeakerProfile[] = Object.values(session.speakers)
+    .filter(
+      (spk) =>
+        session.segments.length === 0 ||
+        spk.segment_count > 0 ||
+        activeSpeakerIdsInSession.has(spk.id)
+    )
+    .sort((a, b) => {
+      const numA = parseInt(a.id.replace('speaker_', ''), 10) || 999;
+      const numB = parseInt(b.id.replace('speaker_', ''), 10) || 999;
+      return numA - numB;
+    });
   const targetLangObj = languages.find(
     (l) => l.code === session.target_language
   );
@@ -60,11 +74,16 @@ export const SpeakerPanel: React.FC<SpeakerPanelProps> = ({
     <aside className="w-80 border-l border-slate-800/80 bg-slate-900/60 flex flex-col shrink-0 select-none">
       {/* Header */}
       <div className="p-4 border-b border-slate-800/80 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <Users className="w-4 h-4 text-blue-400" />
-          <h2 className="text-sm font-semibold text-white">
-            {t('speakersAndLanguages')} ({speakersList.length})
-          </h2>
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <Users className="w-4 h-4 text-blue-400 shrink-0" />
+            <h2 className="text-sm font-semibold text-white">
+              {t('speakersAndLanguages')} ({speakersList.length})
+            </h2>
+          </div>
+          <div className="text-[11px] text-indigo-300 font-medium truncate mt-0.5">
+            {session.title}
+          </div>
         </div>
         {speakersList.length >= 2 && (
           <button

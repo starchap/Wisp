@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Clock,
   Download,
@@ -62,6 +62,10 @@ export function App() {
   const [activeSession, setActiveSession] = useState<MeetingSession | null>(
     null
   );
+  const activeSessionIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    activeSessionIdRef.current = activeSession?.id || null;
+  }, [activeSession?.id]);
   const [liveState, setLiveState] = useState<LiveState>({
     is_recording: false,
     session_id: null,
@@ -244,6 +248,13 @@ export function App() {
           } else if (msg.type === 'live_level') {
             setLiveState((prev) => ({ ...prev, rms_level: msg.data.rms }));
           } else if (msg.type === 'upload_progress') {
+            if (
+              msg.data.session_id &&
+              activeSessionIdRef.current &&
+              msg.data.session_id !== activeSessionIdRef.current
+            ) {
+              return;
+            }
             if (msg.data.error) {
               setErrorBanner(msg.data.error);
               setUploadProgress(null);
@@ -256,7 +267,14 @@ export function App() {
               });
             }
           } else if (msg.type === 'speaker_reprocessing') {
-            const { speaker_id, status } = msg.data;
+            const { session_id, speaker_id, status } = msg.data;
+            if (
+              session_id &&
+              activeSessionIdRef.current &&
+              session_id !== activeSessionIdRef.current
+            ) {
+              return;
+            }
             setReprocessingSpeakers((prev) => ({
               ...prev,
               [speaker_id]: status === 'running',
@@ -418,9 +436,15 @@ export function App() {
   };
 
   const handleSelectSession = async (sessionId: string) => {
+    activeSessionIdRef.current = sessionId;
+    setActiveSegmentId(null);
+    setReprocessingSpeakers({});
+    setUploadProgress(null);
     const loaded = await fetchSession(sessionId);
-    setActiveSession(loaded);
-    setAudioCacheBust(Date.now());
+    if (activeSessionIdRef.current === sessionId) {
+      setActiveSession(loaded);
+      setAudioCacheBust(Date.now());
+    }
   };
 
   const handleDeleteSession = async (
@@ -648,6 +672,7 @@ export function App() {
         {/* Center: Multi-Speaker Transcript & Translation Feed */}
         {activeSession ? (
           <TranscriptFeed
+            key={activeSession.id}
             session={activeSession}
             languages={config?.languages || []}
             activeSegmentId={activeSegmentId}
@@ -701,6 +726,7 @@ export function App() {
         {/* Right: Speaker Recognition & Per-Speaker Language Assignment Panel */}
         {activeSession && (
           <SpeakerPanel
+            key={activeSession.id}
             session={activeSession}
             languages={config?.languages || []}
             reprocessingSpeakers={reprocessingSpeakers}

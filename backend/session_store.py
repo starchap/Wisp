@@ -219,9 +219,22 @@ class SessionStore:
             spk.segment_count = 0
             spk.total_duration = 0.0
         for seg in session.segments:
-            if seg.speaker_id in session.speakers:
-                session.speakers[seg.speaker_id].segment_count += 1
-                session.speakers[seg.speaker_id].total_duration += max(0.0, seg.end - seg.start)
+            if seg.speaker_id not in session.speakers:
+                self.ensure_speaker(session, seg.speaker_id)
+            session.speakers[seg.speaker_id].segment_count += 1
+            session.speakers[seg.speaker_id].total_duration += max(0.0, seg.end - seg.start)
+
+        # If the session has segments, prune any unused/orphan speaker with 0 segments
+        # so each session only lists speakers who actually spoke in this session
+        if session.segments:
+            empty_ids = [
+                spk_id
+                for spk_id, spk in session.speakers.items()
+                if spk.segment_count == 0
+            ]
+            for spk_id in empty_ids:
+                session.speakers.pop(spk_id, None)
+                session.embeddings.pop(spk_id, None)
 
         payload = session.to_dict()
         payload["embeddings"] = session.embeddings
@@ -276,6 +289,8 @@ class SessionStore:
                 "session_type": s.session_type,
                 "source_file_name": s.source_file_name,
                 "target_language": s.target_language,
+                "whisper_model": s.whisper_model,
+                "translation_model": s.translation_model,
                 "duration": round(s.duration, 2),
                 "speaker_count": len(s.speakers),
                 "segment_count": len(s.segments),

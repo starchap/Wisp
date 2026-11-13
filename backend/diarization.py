@@ -106,15 +106,16 @@ class LocalSpeakerDiarizer:
         self,
         audio_16k: np.ndarray,
         session_embeddings: Dict[str, List[float]],
-        max_speakers: int = 8,
+        max_speakers: int = 6,
     ) -> Tuple[str, Dict[str, List[float]]]:
         """
-        Match an utterance's audio against existing speakers in `session_embeddings`.
-        Updates the centroid for the matched speaker or creates `speaker_N` if it's a new voice.
+        Match an utterance's audio against existing speakers in `session_embeddings` (isolated per session).
+        Updates the centroid for the matched speaker or creates `speaker_N` if it's a genuinely distinct voice.
         """
+        duration_sec = len(audio_16k) / float(SAMPLE_RATE)
         emb = self.extract_embedding(audio_16k)
         if emb is None:
-            spk_id = "speaker_1"
+            spk_id = next(iter(session_embeddings.keys()), "speaker_1")
             return spk_id, session_embeddings
 
         if not session_embeddings:
@@ -133,19 +134,28 @@ class LocalSpeakerDiarizer:
                 best_sim = sim
                 best_spk = spk_id
 
+        # Short clips (< 1.5s) have noisier embeddings: match existing speaker more generously
+        # instead of spawning a new speaker for every brief "Yes" / "Okay"
+        effective_threshold = (
+            self.similarity_threshold * 0.65
+            if duration_sec < 1.5
+            else self.similarity_threshold * 0.85
+        )
+
         if best_spk is not None and (
-            best_sim >= self.similarity_threshold or len(session_embeddings) >= max_speakers
+            best_sim >= effective_threshold or len(session_embeddings) >= max_speakers
         ):
-            # Update running centroid (exponential moving average)
-            old_centroid = np.array(session_embeddings[best_spk], dtype=np.float32)
-            updated = 0.8 * old_centroid + 0.2 * emb
-            norm = np.linalg.norm(updated)
-            if norm > 1e-8:
-                updated /= norm
-            session_embeddings[best_spk] = updated.tolist()
+            # Only update running centroid if clip is long enough to be a clean voice sample
+            if duration_sec >= 1.2:
+                old_centroid = np.array(session_embeddings[best_spk], dtype=np.float32)
+                updated = 0.82 * old_centroid + 0.18 * emb
+                norm = np.linalg.norm(updated)
+                if norm > 1e-8:
+                    updated /= norm
+                session_embeddings[best_spk] = updated.tolist()
             return best_spk, session_embeddings
 
-        # Create a new speaker ID
+        # Create a new speaker ID within this session
         next_idx = len(session_embeddings) + 1
         new_spk_id = f"speaker_{next_idx}"
         while new_spk_id in session_embeddings:
@@ -162,13 +172,15 @@ class LocalSpeakerDiarizer:
         num_speakers: Optional[int] = None,
     ) -> Tuple[List[str], Dict[str, List[float]]]:
         """
-        Given a full recording and a list of (start_sec, end_sec) segments,
-        extract embeddings for all segments and cluster them into speaker_1, speaker_2, etc.
+        Given a full recording and a list of (start_sec, end_sec) segments for a single session,
+        extract embeddings for all segments and cluster them into isolated per-session
+        speaker_1, speaker_2, etc., consolidating noisy short utterances into core speaker centroids.
         """
         if not segments_times:
             return [], {}
 
         embeddings: List[np.ndarray] = []
+        durations: List[float] = []
         valid_indices: List[int] = []
 
         for idx, (start_s, end_s) in enumerate(segments_times):
@@ -178,6 +190,7 @@ class LocalSpeakerDiarizer:
             emb = self.extract_embedding(clip)
             if emb is not None:
                 embeddings.append(emb)
+                durations.append(max(0.1, end_s - start_s))
                 valid_indices.append(idx)
 
         if len(embeddings) <= 1:
@@ -185,26 +198,36 @@ class LocalSpeakerDiarizer:
             return ["speaker_1" for _ in segments_times], centroids
 
         emb_matrix = np.vstack(embeddings)
+        dur_array = np.array(durations, dtype=np.float32)
 
-        # Use AgglomerativeClustering with cosine distance
+        # Stage 1: Identify anchor segments (>= 1.5s) with reliable voiceprints
+        anchor_mask = dur_array >= 1.5
+        if np.sum(anchor_mask) < 2:
+            anchor_mask = np.ones(len(embeddings), dtype=bool)
+
+        anchor_indices = np.where(anchor_mask)[0]
+        anchor_embs = emb_matrix[anchor_indices]
+
+        # Cluster anchor segments
         try:
             from sklearn.cluster import AgglomerativeClustering
 
             if num_speakers is not None and num_speakers > 1:
-                n_clusters = min(num_speakers, len(embeddings))
+                n_clusters = min(num_speakers, len(anchor_embs))
                 clustering = AgglomerativeClustering(
                     n_clusters=n_clusters,
                     metric="cosine",
                     linkage="average",
                 )
             else:
+                # Cosine distance threshold ~0.64 (similarity ~0.36) prevents over-splitting the same voice
                 clustering = AgglomerativeClustering(
                     n_clusters=None,
-                    distance_threshold=1.0 - self.similarity_threshold,
+                    distance_threshold=0.64,
                     metric="cosine",
                     linkage="average",
                 )
-            raw_labels = clustering.fit_predict(emb_matrix)
+            anchor_labels = clustering.fit_predict(anchor_embs)
         except Exception as exc:
             print(f"[Diarizer] Fallback to online clustering: {exc}")
             assigned = []
@@ -218,26 +241,110 @@ class LocalSpeakerDiarizer:
                 assigned.append(spk)
             return assigned, centroids
 
-        # Remap cluster labels in order of first appearance so first voice is always speaker_1
+        # Build initial cluster centroids from anchor segments (weighted by segment duration)
+        cluster_vecs: Dict[int, List[Tuple[np.ndarray, float]]] = {}
+        for a_idx, lbl in zip(anchor_indices, anchor_labels):
+            cluster_vecs.setdefault(int(lbl), []).append(
+                (emb_matrix[a_idx], float(dur_array[a_idx]))
+            )
+
+        def _compute_centroid(items: List[Tuple[np.ndarray, float]]) -> np.ndarray:
+            weights = np.array([w for _, w in items], dtype=np.float32)[:, None]
+            vecs = np.vstack([v for v, _ in items])
+            c = np.sum(vecs * weights, axis=0)
+            norm = np.linalg.norm(c)
+            return c / norm if norm > 1e-8 else c
+
+        # Stage 2: Iteratively merge clusters whose centroids are similar (>= 0.40)
+        # or absorb tiny 1-segment outlier clusters when auto-detecting speakers
+        target_max = num_speakers if (num_speakers and num_speakers > 0) else 6
+        while len(cluster_vecs) > 1:
+            c_ids = sorted(cluster_vecs.keys())
+            centroids_map = {cid: _compute_centroid(cluster_vecs[cid]) for cid in c_ids}
+
+            best_pair = None
+            best_sim = -1.0
+            for i, c1 in enumerate(c_ids):
+                for c2 in c_ids[i + 1 :]:
+                    sim = _cosine_similarity(centroids_map[c1], centroids_map[c2])
+                    if sim > best_sim:
+                        best_sim = sim
+                        best_pair = (c1, c2)
+
+            if best_pair is None:
+                break
+
+            # Merge if centroid similarity >= 0.40, or if we have more clusters than target_max
+            if best_sim >= 0.40 or len(cluster_vecs) > target_max:
+                c_keep, c_merge = best_pair
+                cluster_vecs[c_keep].extend(cluster_vecs.pop(c_merge))
+                continue
+
+            # If auto-detecting and a cluster has only 1 segment (< 5.0s),
+            # absorb the singleton into the closest multi-segment speaker cluster so brief
+            # interjections don't spawn extra speakers (Speaker 4..16)
+            if not num_speakers:
+                singleton_merged = False
+                for cid in list(c_ids):
+                    items = cluster_vecs[cid]
+                    total_dur = sum(w for _, w in items)
+                    if len(items) == 1 and total_dur < 5.0 and len(cluster_vecs) > 1:
+                        other_ids = [o for o in c_ids if o != cid and len(cluster_vecs[o]) >= 2]
+                        if not other_ids:
+                            other_ids = [o for o in c_ids if o != cid]
+                        if other_ids:
+                            best_other = max(
+                                other_ids,
+                                key=lambda o: _cosine_similarity(centroids_map[cid], centroids_map[o]),
+                            )
+                            cluster_vecs[best_other].extend(cluster_vecs.pop(cid))
+                            singleton_merged = True
+                            break
+                if singleton_merged:
+                    continue
+            break
+
+        # Final core centroids
+        core_ids = sorted(cluster_vecs.keys())
+        core_centroids = {cid: _compute_centroid(cluster_vecs[cid]) for cid in core_ids}
+
+        # Stage 3: Assign every segment to the best matching core speaker centroid
+        # (with a small temporal continuity bonus for very short < 1.4s segments)
+        raw_assigned: List[int] = []
+        prev_cid: Optional[int] = None
+        for emb_idx in range(len(embeddings)):
+            emb = emb_matrix[emb_idx]
+            dur = dur_array[emb_idx]
+            best_cid = core_ids[0]
+            best_score = -2.0
+            for cid in core_ids:
+                sim = _cosine_similarity(emb, core_centroids[cid])
+                if dur < 1.4 and prev_cid is not None and cid == prev_cid:
+                    sim += 0.08
+                if sim > best_score:
+                    best_score = sim
+                    best_cid = cid
+            raw_assigned.append(best_cid)
+            prev_cid = best_cid
+
+        # Stage 4: Remap cluster labels in order of first appearance (speaker_1, speaker_2, ...)
         label_to_speaker: Dict[int, str] = {}
-        centroids_accum: Dict[str, List[np.ndarray]] = {}
+        centroids_accum: Dict[str, List[Tuple[np.ndarray, float]]] = {}
         ordered_speakers: List[str] = ["speaker_1"] * len(segments_times)
 
         for emb_idx, seg_idx in enumerate(valid_indices):
-            raw_lbl = int(raw_labels[emb_idx])
+            raw_lbl = raw_assigned[emb_idx]
             if raw_lbl not in label_to_speaker:
                 spk_num = len(label_to_speaker) + 1
                 label_to_speaker[raw_lbl] = f"speaker_{spk_num}"
             spk_id = label_to_speaker[raw_lbl]
             ordered_speakers[seg_idx] = spk_id
-            centroids_accum.setdefault(spk_id, []).append(emb_matrix[emb_idx])
+            centroids_accum.setdefault(spk_id, []).append(
+                (emb_matrix[emb_idx], float(dur_array[emb_idx]))
+            )
 
         centroids_out: Dict[str, List[float]] = {}
-        for spk_id, vecs in centroids_accum.items():
-            mean_v = np.mean( np.vstack(vecs), axis=0 )
-            norm = np.linalg.norm(mean_v)
-            if norm > 1e-8:
-                mean_v /= norm
-            centroids_out[spk_id] = mean_v.tolist()
+        for spk_id, items in centroids_accum.items():
+            centroids_out[spk_id] = _compute_centroid(items).tolist()
 
         return ordered_speakers, centroids_out
