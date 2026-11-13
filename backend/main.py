@@ -527,9 +527,10 @@ async def api_upload_recording(
     session_id: str,
     file: UploadFile = File(...),
     num_speakers: Optional[int] = Form(None),
+    original_filename: Optional[str] = Form(None),
 ):
     """
-    Import an existing meeting recording (.wav, .mp3, .m4a, .mp4, .ogg, .webm)
+    Import an existing meeting recording (.wav, .mp3, .m4a, .mp4, .flac, .ogg, .webm)
     and run local speaker diarization, per-speaker language transcription, and translation.
     """
     session = store.get_session(session_id)
@@ -537,15 +538,16 @@ async def api_upload_recording(
         raise HTTPException(status_code=404, detail="Session not found")
 
     raw_bytes = await file.read()
+    display_filename = original_filename or file.filename or "audio.wav"
     try:
-        audio_16k = decode_audio_to_16k_mono(raw_bytes, filename=file.filename or "audio.wav")
+        audio_16k = decode_audio_to_16k_mono(raw_bytes, filename=file.filename or display_filename)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Could not decode audio file: {exc}")
 
     if len(audio_16k) == 0:
         raise HTTPException(status_code=400, detail="Audio file contains no valid audio samples.")
 
-    session.source_file_name = file.filename or "audio.wav"
+    session.source_file_name = display_filename
     session.speakers = {}
     session.segments = []
     session.embeddings = {}

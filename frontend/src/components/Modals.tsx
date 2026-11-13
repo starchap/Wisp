@@ -1296,7 +1296,7 @@ export const SessionDialogModal: React.FC<SessionDialogModalProps> = ({
               >
                 <input
                   type="file"
-                  accept=".mp3,.wav,.flac,.ogg,.m4a,.webm,.mp4,audio/mpeg,audio/mp3,audio/wav,audio/*"
+                  accept=".mp3,.m4a,.wav,.flac,.ogg,.aac,.webm,.mp4,audio/mpeg,audio/mp3,audio/mp4,audio/x-m4a,audio/aac,audio/wav,audio/*"
                   onChange={(e) => {
                     const f = e.target.files?.[0];
                     if (f) {

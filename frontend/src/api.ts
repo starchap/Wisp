@@ -194,13 +194,93 @@ export async function reassignSegmentSpeaker(
   return res.json();
 }
 
+function encodeMonoFloat32ToWavBlob(
+  samples: Float32Array,
+  sampleRate: number
+): Blob {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+
+  const writeStr = (offset: number, str: string) => {
+    for (let i = 0; i < str.length; i++) {
+      view.setUint8(offset + i, str.charCodeAt(i));
+    }
+  };
+
+  writeStr(0, 'RIFF');
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true); // PCM chunk size
+  view.setUint16(20, 1, true); // PCM format = 1
+  view.setUint16(22, 1, true); // Mono = 1 channel
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true); // Byte rate
+  view.setUint16(32, 2, true); // Block align
+  view.setUint16(34, 16, true); // 16-bit
+  writeStr(36, 'data');
+  view.setUint32(40, samples.length * 2, true);
+
+  let offset = 44;
+  for (let i = 0; i < samples.length; i++, offset += 2) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+
+async function transcodeContainerAudioIfNeeded(file: File): Promise<File> {
+  const lower = file.name.toLowerCase();
+  const needsWebAudioDecode =
+    lower.endsWith('.m4a') ||
+    lower.endsWith('.mp4') ||
+    lower.endsWith('.aac') ||
+    lower.endsWith('.webm');
+
+  if (!needsWebAudioDecode) {
+    return file;
+  }
+
+  try {
+    const arrayBuf = await file.arrayBuffer();
+    const AudioCtx =
+      window.AudioContext || (window as any).webkitAudioContext;
+    const ctx: AudioContext = new AudioCtx({ sampleRate: 16000 });
+    const decoded = await ctx.decodeAudioData(arrayBuf);
+    await ctx.close().catch(() => {});
+
+    const length = decoded.length;
+    const numChannels = decoded.numberOfChannels;
+    const mono = new Float32Array(length);
+    for (let ch = 0; ch < numChannels; ch++) {
+      const chData = decoded.getChannelData(ch);
+      for (let i = 0; i < length; i++) {
+        mono[i] += chData[i] / numChannels;
+      }
+    }
+
+    const wavBlob = encodeMonoFloat32ToWavBlob(mono, decoded.sampleRate);
+    return new File(
+      [wavBlob],
+      file.name.replace(/\.[^/.]+$/, '') + '.wav',
+      { type: 'audio/wav' }
+    );
+  } catch (_) {
+    // Fallback to raw file if WebAudio decode fails
+    return file;
+  }
+}
+
 export async function uploadAudioRecording(
   sessionId: string,
   file: File,
   numSpeakers?: number
 ): Promise<void> {
+  const preparedFile = await transcodeContainerAudioIfNeeded(file);
   const form = new FormData();
-  form.append('file', file);
+  form.append('file', preparedFile);
+  form.append('original_filename', file.name);
   if (numSpeakers && numSpeakers > 0) {
     form.append('num_speakers', String(numSpeakers));
   }

@@ -103,34 +103,54 @@ def decode_audio_to_16k_mono(raw_bytes: bytes, filename: str = "audio.wav") -> n
             mono = resample_poly(mono, up, down).astype(np.float32)
         return mono
     except Exception as first_err:
-        # Fallback to ffmpeg CLI if installed for container formats like .mp4 / .m4a
-        suffix = Path(filename).suffix or ".tmp"
+        # Fallback to native OS audio converters (macOS `afconvert` or `ffmpeg`) for .m4a / .mp4 / .aac
+        suffix = Path(filename).suffix or ".m4a"
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp_in:
             tmp_in.write(raw_bytes)
             in_path = tmp_in.name
         out_path = in_path + ".wav"
         try:
-            subprocess.run(
-                [
-                    "ffmpeg",
-                    "-y",
-                    "-i",
-                    in_path,
-                    "-ar",
-                    str(SAMPLE_RATE),
-                    "-ac",
-                    "1",
-                    out_path,
-                ],
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            import sys
+            if sys.platform == "darwin":
+                # macOS built-in CoreAudio converter for .m4a / .mp4 / .aac
+                subprocess.run(
+                    [
+                        "afconvert",
+                        "-f",
+                        "WAVE",
+                        "-d",
+                        f"LEI16@{SAMPLE_RATE}",
+                        "-c",
+                        "1",
+                        in_path,
+                        out_path,
+                    ],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            else:
+                subprocess.run(
+                    [
+                        "ffmpeg",
+                        "-y",
+                        "-i",
+                        in_path,
+                        "-ar",
+                        str(SAMPLE_RATE),
+                        "-ac",
+                        "1",
+                        out_path,
+                    ],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
             mono, _ = sf.read(out_path, dtype="float32", always_2d=False)
             return mono.astype(np.float32)
         except Exception:
             raise ValueError(
-                f"Could not decode audio file ({first_err}). Supported formats out-of-the-box: WAV, MP3, FLAC, OGG."
+                f"Could not decode audio file ({first_err}). Supported formats out-of-the-box: WAV, MP3, M4A, FLAC, OGG."
             )
         finally:
             Path(in_path).unlink(missing_ok=True)
