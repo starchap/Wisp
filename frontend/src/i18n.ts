@@ -728,7 +728,7 @@ interface I18nContextValue {
 export const I18nContext = createContext<I18nContextValue>({
   uiLanguage: 'en',
   setUiLanguage: () => {},
-  theme: 'dark',
+  theme: 'system',
   setTheme: () => {},
   t: (k) => TRANSLATIONS.en[k] || k,
 });

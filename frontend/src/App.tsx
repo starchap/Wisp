@@ -99,7 +99,7 @@ export function App() {
     () => (localStorage.getItem('wisp_ui_lang') as UILanguage) || 'en'
   );
   const [theme, setThemeState] = useState<ThemeMode>(
-    () => (localStorage.getItem('wisp_theme') as ThemeMode) || 'dark'
+    () => (localStorage.getItem('wisp_theme') as ThemeMode) || 'system'
   );
   const [defaultOutputLang, setDefaultOutputLang] = useState<string>(
     () => localStorage.getItem('wisp_default_output_lang') || 'en'
