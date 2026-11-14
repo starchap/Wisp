@@ -12,7 +12,7 @@
     "dev:vite": "vite --port 5173",
     "dev:electron": "electron .",
     "build": "tsc -b && vite build",
-    "dist:win": "npm run build && electron-builder --win nsis portable",
+    "dist:win": "npm run build && electron-builder --win nsis portable zip",
     "dist:mac": "npm run build && electron-builder --mac dmg zip",
     "dist:linux": "npm run build && electron-builder --linux deb rpm AppImage"
   },
@@ -66,9 +66,21 @@
     "win": {
       "target": [
         "nsis",
-        "portable"
+        "portable",
+        "zip"
       ],
       "icon": "public/wisp-icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "differentialPackage": false,
+      "artifactName": "${productName}-Setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "${productName}-Portable-${version}.${ext}",
+      "unpackDirName": "WispApp"
     },
     "mac": {
       "target": [

@@ -7,7 +7,6 @@ numpy>=1.26.0,<2.0.0
 scipy>=1.11.0
 soundfile>=0.12.1
 soundcard>=0.4.3
-scikit-learn>=1.4.0
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
 python-multipart>=0.0.9

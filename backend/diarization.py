@@ -209,26 +209,19 @@ class LocalSpeakerDiarizer:
         anchor_indices = np.where(anchor_mask)[0]
         anchor_embs = emb_matrix[anchor_indices]
 
-        # Cluster anchor segments
+        # Cluster anchor segments using SciPy hierarchical average-linkage cosine clustering
         try:
-            from sklearn.cluster import AgglomerativeClustering
+            from scipy.cluster.hierarchy import fcluster, linkage
+            from scipy.spatial.distance import pdist
 
+            dists = np.clip(pdist(anchor_embs, metric="cosine"), 0.0, 2.0)
+            z_mat = linkage(dists, method="average")
             if num_speakers is not None and num_speakers > 1:
                 n_clusters = min(num_speakers, len(anchor_embs))
-                clustering = AgglomerativeClustering(
-                    n_clusters=n_clusters,
-                    metric="cosine",
-                    linkage="average",
-                )
+                anchor_labels = fcluster(z_mat, t=n_clusters, criterion="maxclust")
             else:
                 # Cosine distance threshold ~0.64 (similarity ~0.36) prevents over-splitting the same voice
-                clustering = AgglomerativeClustering(
-                    n_clusters=None,
-                    distance_threshold=0.64,
-                    metric="cosine",
-                    linkage="average",
-                )
-            anchor_labels = clustering.fit_predict(anchor_embs)
+                anchor_labels = fcluster(z_mat, t=0.64, criterion="distance")
         except Exception as exc:
             print(f"[Diarizer] Fallback to online clustering: {exc}")
             assigned = []
