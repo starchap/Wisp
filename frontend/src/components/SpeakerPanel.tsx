@@ -85,19 +85,6 @@ export const SpeakerPanel: React.FC<SpeakerPanelProps> = ({
             {session.title}
           </div>
         </div>
-        {speakersList.length >= 2 && (
-          <button
-            onClick={() =>
-              onOpenMergeModal(
-                speakersList[1]?.id || speakersList[0].id
-              )
-            }
-            className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 transition"
-          >
-            <GitMerge className="w-3.5 h-3.5" />
-            <span>{t('merge')}</span>
-          </button>
-        )}
       </div>
 
       {/* Info Banner explaining per-speaker language -> output language */}

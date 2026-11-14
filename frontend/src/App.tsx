@@ -197,17 +197,7 @@ export function App() {
           const first = await fetchSession(list[0].id);
           if (mounted) setActiveSession(first);
         } else {
-          const created = await createSession(
-            'Sales Meeting #1',
-            'en',
-            cfg.default_whisper_model,
-            cfg.default_translation_model,
-            'file'
-          );
-          if (mounted) {
-            setActiveSession(created);
-            setSessionsList(await fetchSessions());
-          }
+          if (mounted) setActiveSession(null);
         }
       } catch (err: any) {
         if (mounted) {
@@ -459,17 +449,19 @@ export function App() {
       if (remaining.length > 0) {
         setActiveSession(await fetchSession(remaining[0].id));
       } else {
-        const created = await createSession(
-          'Sales Meeting #1',
-          defaultOutputLang || 'en',
-          config?.default_whisper_model || 'tiny',
-          config?.default_translation_model || 'opus-mt-da-en',
-          'file'
-        );
-        setActiveSession(created);
-        setSessionsList(await fetchSessions());
+        activeSessionIdRef.current = null;
+        setActiveSession(null);
       }
     }
+  };
+
+  const handleDeleteAllSessions = async () => {
+    for (const s of sessionsList) {
+      await deleteSession(s.id);
+    }
+    setSessionsList([]);
+    activeSessionIdRef.current = null;
+    setActiveSession(null);
   };
 
   const handlePlaySegment = (segment: TranscriptSegment) => {
@@ -574,15 +566,27 @@ export function App() {
                   {t('recordedSessions')} ({sessionsList.length})
                 </span>
               </div>
-              <button
-                type="button"
-                onClick={openNewSessionDialog}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-blue-600 hover:bg-blue-500 text-white shadow-md shadow-blue-600/20 transition"
-                title={t('newRecordingSession')}
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>{t('newBtn')}</span>
-              </button>
+              <div className="flex items-center gap-1.5">
+                {sessionsList.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleDeleteAllSessions}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/15 transition"
+                    title="Delete all sessions"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={openNewSessionDialog}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-blue-600 hover:bg-blue-500 text-white shadow-md shadow-blue-600/20 transition"
+                  title={t('newRecordingSession')}
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>{t('newBtn')}</span>
+                </button>
+              </div>
             </div>
 
           <div className="flex-1 overflow-y-auto p-2.5 space-y-1.5">
@@ -718,8 +722,24 @@ export function App() {
             }}
           />
         ) : (
-          <div className="flex-1 flex items-center justify-center text-slate-500 text-sm">
-            Loading session...
+          <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
+            <div className="max-w-sm rounded-2xl border border-slate-800 bg-slate-900/50 p-6 space-y-3">
+              <FolderOpen className="w-10 h-10 text-indigo-400 mx-auto" />
+              <div className="text-sm font-semibold text-white">
+                {t('recordedSessions')} (0)
+              </div>
+              <p className="text-xs text-slate-400">
+                {t('newSessionSub')}
+              </p>
+              <button
+                type="button"
+                onClick={openNewSessionDialog}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-blue-600 hover:bg-blue-500 text-white shadow-md shadow-blue-600/20 transition"
+              >
+                <Plus className="w-4 h-4" />
+                <span>{t('newRecordingSession')}</span>
+              </button>
+            </div>
           </div>
         )}
 
