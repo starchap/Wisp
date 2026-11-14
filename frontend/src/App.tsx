@@ -674,74 +674,79 @@ export function App() {
         </aside>
 
         {/* Center: Multi-Speaker Transcript & Translation Feed */}
-        {activeSession ? (
-          <TranscriptFeed
-            key={`feed-${activeSession.id}`}
-            session={activeSession}
-            languages={config?.languages || []}
-            activeSegmentId={activeSegmentId}
-            showTranslated={showTranslated}
-            onToggleTranslated={setShowTranslated}
-            onPlaySegment={handlePlaySegment}
-            onOpenEditSession={() => openEditSessionDialog(activeSession)}
-            onReprocessSession={async () => {
-              if (!activeSession) return;
-              setUploadProgress({
-                message: `Re-transcribing & translating with ${activeSession.whisper_model}...`,
-                percent: 8,
-              });
-              try {
-                await reprocessSessionAudio(activeSession.id);
-              } catch (err: any) {
-                setUploadProgress(null);
-                setErrorBanner(err.message || 'Re-transcribe failed');
+        <main className="flex-1 flex min-w-0 overflow-hidden">
+          {activeSession ? (
+            <TranscriptFeed
+              key={`feed-${activeSession.id}`}
+              session={activeSession}
+              languages={config?.languages || []}
+              activeSegmentId={activeSegmentId}
+              showTranslated={showTranslated}
+              onToggleTranslated={setShowTranslated}
+              onPlaySegment={handlePlaySegment}
+              onOpenEditSession={() => openEditSessionDialog(activeSession)}
+              onReprocessSession={async () => {
+                if (!activeSession) return;
+                setUploadProgress({
+                  message: `Re-transcribing & translating with ${activeSession.whisper_model}...`,
+                  percent: 8,
+                });
+                try {
+                  await reprocessSessionAudio(activeSession.id);
+                } catch (err: any) {
+                  setUploadProgress(null);
+                  setErrorBanner(err.message || 'Re-transcribe failed');
+                }
+              }}
+              devices={
+                config?.audio_devices || { microphones: [], loopbacks: [] }
               }
-            }}
-            devices={
-              config?.audio_devices || { microphones: [], loopbacks: [] }
-            }
-            selectedLoopback={selectedLoopback}
-            selectedMic={selectedMic}
-            onChangeLoopback={setSelectedLoopback}
-            onChangeMic={setSelectedMic}
-            liveState={liveState}
-            onStartLive={async (loopbackId, micId) => {
-              if (!activeSession) return;
-              const st = await startLiveCapture({
-                session_id: activeSession.id,
-                loopback_id: loopbackId,
-                mic_id: micId,
-                chunk_seconds: 4.0,
-              });
-              setLiveState(st);
-            }}
-            onStopLive={async () => {
-              const st = await stopLiveCapture();
-              setLiveState(st);
-              setAudioCacheBust(Date.now());
-            }}
-          />
-        ) : (
-          <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
-            <div className="max-w-sm rounded-2xl border border-slate-800 bg-slate-900/50 p-6 space-y-3">
-              <FolderOpen className="w-10 h-10 text-indigo-400 mx-auto" />
-              <div className="text-sm font-semibold text-white">
-                {t('recordedSessions')} (0)
+              selectedLoopback={selectedLoopback}
+              selectedMic={selectedMic}
+              onChangeLoopback={setSelectedLoopback}
+              onChangeMic={setSelectedMic}
+              liveState={liveState}
+              onStartLive={async (loopbackId, micId) => {
+                if (!activeSession) return;
+                const st = await startLiveCapture({
+                  session_id: activeSession.id,
+                  loopback_id: loopbackId,
+                  mic_id: micId,
+                  chunk_seconds: 4.0,
+                });
+                setLiveState(st);
+              }}
+              onStopLive={async () => {
+                const st = await stopLiveCapture();
+                setLiveState(st);
+                setAudioCacheBust(Date.now());
+              }}
+            />
+          ) : (
+            <div
+              key="empty-sessions-view"
+              className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-slate-950/60"
+            >
+              <div className="max-w-sm rounded-2xl border border-slate-800 bg-slate-900/40 p-8 space-y-3 shadow-sm">
+                <FolderOpen className="w-10 h-10 text-indigo-400 mx-auto" />
+                <div className="text-sm font-semibold text-white">
+                  {t('recordedSessions')} (0)
+                </div>
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  {t('newSessionSub')}
+                </p>
+                <button
+                  type="button"
+                  onClick={openNewSessionDialog}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-blue-600 hover:bg-blue-500 text-white shadow-md shadow-blue-600/20 transition"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>{t('newRecordingSession')}</span>
+                </button>
               </div>
-              <p className="text-xs text-slate-400">
-                {t('newSessionSub')}
-              </p>
-              <button
-                type="button"
-                onClick={openNewSessionDialog}
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-blue-600 hover:bg-blue-500 text-white shadow-md shadow-blue-600/20 transition"
-              >
-                <Plus className="w-4 h-4" />
-                <span>{t('newRecordingSession')}</span>
-              </button>
             </div>
-          </div>
-        )}
+          )}
+        </main>
 
         {/* Right: Speaker Recognition & Per-Speaker Language Assignment Panel */}
         {activeSession && (
