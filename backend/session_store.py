@@ -302,6 +302,10 @@ class SessionStore:
         if session_id not in self.sessions:
             return False
         del self.sessions[session_id]
+        try:
+            self._metadata_path(session_id).unlink(missing_ok=True)
+        except Exception:
+            pass
         folder = self._session_dir(session_id)
         import shutil
         shutil.rmtree(folder, ignore_errors=True)

@@ -676,7 +676,7 @@ export function App() {
         {/* Center: Multi-Speaker Transcript & Translation Feed */}
         {activeSession ? (
           <TranscriptFeed
-            key={activeSession.id}
+            key={`feed-${activeSession.id}`}
             session={activeSession}
             languages={config?.languages || []}
             activeSegmentId={activeSegmentId}
@@ -746,7 +746,7 @@ export function App() {
         {/* Right: Speaker Recognition & Per-Speaker Language Assignment Panel */}
         {activeSession && (
           <SpeakerPanel
-            key={activeSession.id}
+            key={`speakers-${activeSession.id}`}
             session={activeSession}
             languages={config?.languages || []}
             reprocessingSpeakers={reprocessingSpeakers}
