@@ -112,6 +112,7 @@ export interface LiveState {
   loopback_id: string | null;
   mic_id: string | null;
   rms_level: number;
+  active_speaker_id?: string | null;
 }
 
 export interface AppConfig {

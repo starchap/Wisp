@@ -131,7 +131,8 @@ export const TranscriptFeed: React.FC<TranscriptFeedProps> = ({
   const groupedTurns = groupConsecutiveTurns(session);
   const isLiveSession = session.session_type === 'live';
   const isRecording = !!liveState?.is_recording;
-  const levelPct = Math.min(100, Math.round((liveState?.rms_level || 0) * 600));
+  const levelPct = Math.min(100, Math.round((liveState?.rms_level || 0) * 900));
+  const isVoiceActive = isRecording && (liveState?.rms_level || 0) > 0.005;
 
   const handleCopyForWord = () => {
     const text = buildWordCopyText(session, showTranslated);
@@ -306,15 +307,53 @@ export const TranscriptFeed: React.FC<TranscriptFeedProps> = ({
                     <span>{t('stopLiveCapture')}</span>
                   </button>
 
-                  <div className="flex items-center gap-1.5 bg-slate-800/90 px-2.5 py-1.5 rounded-xl border border-rose-500/30">
-                    <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
-                    <span className="text-[10px] font-medium text-rose-300">
-                      LIVE
+                  <div
+                    className={`flex items-center gap-2 bg-slate-800/95 px-3 py-1.5 rounded-xl border transition-all duration-150 ${
+                      isVoiceActive
+                        ? 'border-emerald-400/70 shadow-md shadow-emerald-500/20'
+                        : 'border-rose-500/30'
+                    }`}
+                  >
+                    <span
+                      className={`w-2 h-2 rounded-full ${
+                        isVoiceActive
+                          ? 'bg-emerald-400 animate-ping'
+                          : 'bg-rose-500 animate-pulse'
+                      }`}
+                    />
+                    <span
+                      className={`text-[10px] font-bold tracking-wider ${
+                        isVoiceActive ? 'text-emerald-300' : 'text-rose-300'
+                      }`}
+                    >
+                      {isVoiceActive ? 'SPEAKING' : 'LIVE'}
                     </span>
+
+                    {/* 5-bar real-time voice level equalizer */}
+                    <div className="flex items-end gap-0.5 h-3.5 px-0.5">
+                      {[0.35, 0.65, 1.0, 0.75, 0.45].map((mult, idx) => {
+                        const barH = Math.max(
+                          20,
+                          Math.min(100, Math.round(levelPct * mult))
+                        );
+                        return (
+                          <span
+                            key={idx}
+                            className={`w-1 rounded-full transition-all duration-100 ${
+                              isVoiceActive
+                                ? 'bg-emerald-400'
+                                : 'bg-slate-600'
+                            }`}
+                            style={{ height: `${barH}%` }}
+                          />
+                        );
+                      })}
+                    </div>
+
                     <div className="w-16 h-1.5 bg-slate-900 rounded-full overflow-hidden">
                       <div
-                        className="h-full bg-gradient-to-r from-emerald-400 to-blue-500 transition-all duration-150"
-                        style={{ width: `${Math.max(6, levelPct)}%` }}
+                        className="h-full bg-gradient-to-r from-emerald-400 to-blue-500 transition-all duration-100"
+                        style={{ width: `${Math.max(5, levelPct)}%` }}
                       />
                     </div>
                   </div>

@@ -19,6 +19,8 @@ interface SpeakerPanelProps {
   session: MeetingSession;
   languages: SupportedLanguage[];
   reprocessingSpeakers: Record<string, boolean>;
+  activeSpeakerId?: string | null;
+  isLiveSpeaking?: boolean;
   onUpdateSpeaker: (
     speakerId: string,
     patch: { name?: string; language?: string; reprocess_segments?: boolean }
@@ -31,6 +33,8 @@ export const SpeakerPanel: React.FC<SpeakerPanelProps> = ({
   session,
   languages,
   reprocessingSpeakers,
+  activeSpeakerId = null,
+  isLiveSpeaking = false,
   onUpdateSpeaker,
   onOpenMergeModal,
   onPlaySpeakerSample,
@@ -107,20 +111,41 @@ export const SpeakerPanel: React.FC<SpeakerPanelProps> = ({
         ) : (
           speakersList.map((spk) => {
             const isReprocessing = !!reprocessingSpeakers[spk.id];
+            const isActiveSpeaker = activeSpeakerId === spk.id;
             const otherSpeakers = speakersList.filter((s) => s.id !== spk.id);
 
             return (
               <div
                 key={spk.id}
-                className="rounded-xl bg-slate-800/60 border border-slate-700/70 p-3 space-y-2.5 hover:border-slate-600 transition"
+                style={
+                  isActiveSpeaker
+                    ? {
+                        borderColor: spk.color,
+                        boxShadow: `0 0 18px -2px ${spk.color}55`,
+                      }
+                    : undefined
+                }
+                className={`rounded-xl p-3 space-y-2.5 transition-all duration-200 ${
+                  isActiveSpeaker
+                    ? 'bg-slate-800/95 border-2 scale-[1.01]'
+                    : 'bg-slate-800/60 border border-slate-700/70 hover:border-slate-600'
+                }`}
               >
-                {/* Top row: Color badge, Name / Edit, Merge button, Sample audio playback */}
+                {/* Top row: Color badge, Name / Edit, Active Speaking Badge, Merge button, Sample audio playback */}
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2 min-w-0 flex-1">
-                    <span
-                      className="w-3 h-3 rounded-full shrink-0 shadow-sm"
-                      style={{ backgroundColor: spk.color }}
-                    />
+                    <span className="relative flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+                      {isActiveSpeaker && (
+                        <span
+                          className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75"
+                          style={{ backgroundColor: spk.color }}
+                        />
+                      )}
+                      <span
+                        className="relative inline-flex rounded-full h-3 w-3 shadow-sm"
+                        style={{ backgroundColor: spk.color }}
+                      />
+                    </span>
                     {editingId === spk.id ? (
                       <div className="flex items-center gap-1 flex-1">
                         <input
@@ -149,6 +174,12 @@ export const SpeakerPanel: React.FC<SpeakerPanelProps> = ({
                           {spk.name}
                         </span>
                         <Edit2 className="w-3 h-3 text-slate-500 group-hover:text-slate-300 shrink-0" />
+                        {isActiveSpeaker && (
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 animate-pulse shrink-0">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                            {isLiveSpeaking ? 'LIVE' : 'ACTIVE'}
+                          </span>
+                        )}
                       </div>
                     )}
                   </div>

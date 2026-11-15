@@ -80,8 +80,8 @@ def set_storage_path(new_path_str: str) -> Path:
 WHISPER_MODELS: List[Dict[str, str]] = [
     {
         "id": "tiny",
-        "name": "Whisper Tiny (~110 MB)",
-        "description": "Fastest, lowest memory usage. Great for quick tests.",
+        "name": "Whisper Tiny (~110 MB) — English / Quick Test",
+        "description": "Fastest, lowest memory usage. Best for English; use Small or Turbo for Danish.",
         "size_mb": "110",
         "hf_repo": "csukuangfj/sherpa-onnx-whisper-tiny",
         "prefix": "tiny",
@@ -96,31 +96,31 @@ WHISPER_MODELS: List[Dict[str, str]] = [
     },
     {
         "id": "small",
-        "name": "Whisper Small (~610 MB) — Recommended",
-        "description": "Great balance of speed and multilingual accuracy (Danish, Spanish, English, etc.).",
+        "name": "Whisper Small (~610 MB) — Recommended for Danish",
+        "description": "Great balance of live speed and strong Danish, Spanish, German & English accuracy.",
         "size_mb": "610",
         "hf_repo": "csukuangfj/sherpa-onnx-whisper-small",
         "prefix": "small",
     },
     {
         "id": "medium",
-        "name": "Whisper Medium (~1.7 GB)",
-        "description": "High accuracy for strong accents and noisy meetings.",
+        "name": "Whisper Medium (~1.7 GB) — High Accuracy Danish",
+        "description": "High accuracy for Danish dialects, strong accents, and noisy meetings.",
         "size_mb": "1700",
         "hf_repo": "csukuangfj/sherpa-onnx-whisper-medium",
         "prefix": "medium",
     },
     {
         "id": "turbo",
-        "name": "Whisper Large-v3-Turbo (~1.6 GB)",
-        "description": "Near Large-v3 quality at much faster speed.",
+        "name": "Whisper Large-v3-Turbo (~1.6 GB) — Best Danish Quality",
+        "description": "Tip-top Large-v3 Danish & multilingual accuracy at fast real-time speed.",
         "size_mb": "1600",
         "hf_repo": "csukuangfj/sherpa-onnx-whisper-turbo",
         "prefix": "turbo",
     },
 ]
 
-DEFAULT_WHISPER_MODEL = "tiny"
+DEFAULT_WHISPER_MODEL = "small"
 
 # Selectable Local AI Translation Models (Focused on Danish <-> English + Spanish/German/Multilingual)
 TRANSLATION_MODELS: List[Dict[str, str]] = [

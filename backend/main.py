@@ -79,6 +79,7 @@ live_state = {
     "loopback_id": None,
     "mic_id": None,
     "rms_level": 0.0,
+    "active_speaker_id": None,
 }
 backend_recorder: Optional[BackendLiveRecorder] = None
 
@@ -674,19 +675,48 @@ def api_start_live_recording(req: StartLiveRequest):
     if live_state["is_recording"]:
         api_stop_live_recording()
 
-    def _on_audio_chunk(chunk_16k: np.ndarray, rms: float):
+    last_speaker_ts = [0.0]
+
+    def _on_level(rms: float):
         live_state["rms_level"] = round(rms, 4)
+        if rms < 0.004 and (time.time() - last_speaker_ts[0]) > 2.2:
+            live_state["active_speaker_id"] = None
         broadcast_event(
             "live_level",
-            {"session_id": req.session_id, "rms": live_state["rms_level"], "duration": round(session.duration, 1)},
+            {
+                "session_id": req.session_id,
+                "rms": live_state["rms_level"],
+                "duration": round(session.duration, 1),
+                "active_speaker_id": live_state.get("active_speaker_id"),
+            },
         )
-        new_segs = pipeline.process_live_chunk(session, chunk_16k)
+
+    def _on_speaker_active(spk_id: str):
+        last_speaker_ts[0] = time.time()
+        live_state["active_speaker_id"] = spk_id
+        broadcast_event(
+            "live_speaker",
+            {"session_id": req.session_id, "speaker_id": spk_id},
+        )
+
+    def _on_audio_chunk(chunk_16k: np.ndarray, rms: float):
+        live_state["rms_level"] = round(rms, 4)
+        new_segs = pipeline.process_live_chunk(
+            session, chunk_16k, on_speaker_active=_on_speaker_active
+        )
         if new_segs:
+            last_speaker_ts[0] = time.time()
+            live_state["active_speaker_id"] = new_segs[-1].speaker_id
             broadcast_event("session_updated", session.to_dict())
+            broadcast_event(
+                "live_speaker",
+                {"session_id": req.session_id, "speaker_id": new_segs[-1].speaker_id},
+            )
 
     backend_recorder = BackendLiveRecorder(
         chunk_callback=_on_audio_chunk,
-        chunk_seconds=max(2.0, min(10.0, req.chunk_seconds)),
+        level_callback=_on_level,
+        chunk_seconds=max(2.5, min(10.0, req.chunk_seconds)),
     )
     backend_recorder.start(loopback_id=req.loopback_id, mic_id=req.mic_id)
 
@@ -694,6 +724,7 @@ def api_start_live_recording(req: StartLiveRequest):
     live_state["session_id"] = req.session_id
     live_state["loopback_id"] = req.loopback_id
     live_state["mic_id"] = req.mic_id
+    live_state["active_speaker_id"] = None
     broadcast_event("live_state", live_state)
     return live_state
 
@@ -707,6 +738,7 @@ def api_stop_live_recording():
 
     live_state["is_recording"] = False
     live_state["rms_level"] = 0.0
+    live_state["active_speaker_id"] = None
     broadcast_event("live_state", live_state)
     return live_state
 

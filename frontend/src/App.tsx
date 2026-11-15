@@ -192,6 +192,12 @@ export function App() {
           '';
         setSelectedLoopback((prev) => prev || defLb);
 
+        const defMic =
+          cfg.audio_devices.microphones.find((d) => d.is_default)?.id ||
+          cfg.audio_devices.microphones[0]?.id ||
+          '';
+        setSelectedMic((prev) => prev || defMic);
+
         const list = await fetchSessions();
         if (!mounted) return;
         setSessionsList(list);
@@ -241,7 +247,19 @@ export function App() {
           } else if (msg.type === 'live_state') {
             setLiveState(msg.data);
           } else if (msg.type === 'live_level') {
-            setLiveState((prev) => ({ ...prev, rms_level: msg.data.rms }));
+            setLiveState((prev) => ({
+              ...prev,
+              rms_level: msg.data.rms,
+              active_speaker_id:
+                msg.data.active_speaker_id !== undefined
+                  ? msg.data.active_speaker_id
+                  : prev.active_speaker_id,
+            }));
+          } else if (msg.type === 'live_speaker') {
+            setLiveState((prev) => ({
+              ...prev,
+              active_speaker_id: msg.data.speaker_id,
+            }));
           } else if (msg.type === 'upload_progress') {
             if (
               msg.data.session_id &&
@@ -760,6 +778,22 @@ export function App() {
             session={activeSession}
             languages={config?.languages || []}
             reprocessingSpeakers={reprocessingSpeakers}
+            activeSpeakerId={
+              liveState.is_recording
+                ? liveState.active_speaker_id ||
+                  (liveState.rms_level > 0.005 &&
+                  activeSession.segments.length > 0
+                    ? activeSession.segments[activeSession.segments.length - 1]
+                        .speaker_id
+                    : null)
+                : activeSegmentId
+                ? activeSession.segments.find((s) => s.id === activeSegmentId)
+                    ?.speaker_id || null
+                : null
+            }
+            isLiveSpeaking={
+              liveState.is_recording && (liveState.rms_level || 0) > 0.004
+            }
             onUpdateSpeaker={async (speakerId, patch) => {
               const updated = await updateSpeaker(
                 activeSession.id,

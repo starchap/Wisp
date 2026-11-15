@@ -423,15 +423,27 @@ class LocalSpeechPipeline:
     ) -> str:
         detector = self._get_lang_detector(model_id)
         if detector is None:
-            return "en"
+            return "da"
         try:
+            norm_audio = self._normalize_speech_clip(audio_16k)
             stream = detector.create_stream()
-            stream.accept_waveform(SAMPLE_RATE, audio_16k.tolist())
+            stream.accept_waveform(SAMPLE_RATE, norm_audio.tolist())
             lang = detector.compute(stream)
-            return lang.strip() if lang else "en"
+            return lang.strip() if lang else "da"
         except Exception as exc:
-            print(f"[SpeechPipeline] Language detect fallback to 'en': {exc}")
-            return "en"
+            print(f"[SpeechPipeline] Language detect fallback to 'da': {exc}")
+            return "da"
+
+    @staticmethod
+    def _normalize_speech_clip(audio_16k: np.ndarray) -> np.ndarray:
+        """Peak-normalize quiet microphone/loopback clips so INT8 Whisper models hear speech clearly."""
+        if len(audio_16k) == 0:
+            return audio_16k
+        centered = audio_16k - float(np.mean(audio_16k))
+        peak = float(np.max(np.abs(centered)))
+        if 0.002 < peak < 0.75:
+            return np.clip(centered * (0.82 / peak), -1.0, 1.0).astype(np.float32)
+        return centered.astype(np.float32)
 
     def _get_whisper_recognizer(
         self,
@@ -470,11 +482,12 @@ class LocalSpeechPipeline:
         language: str,
         task: str = "transcribe",
     ) -> str:
+        norm_audio = self._normalize_speech_clip(audio_16k)
         rec = self._get_whisper_recognizer(
             model_id=model_id, language=language, task=task
         )
         stream = rec.create_stream()
-        stream.accept_waveform(SAMPLE_RATE, audio_16k.tolist())
+        stream.accept_waveform(SAMPLE_RATE, norm_audio.tolist())
         rec.decode_stream(stream)
         return stream.result.text.strip()
 
@@ -536,16 +549,17 @@ class LocalSpeechPipeline:
         session: MeetingSession,
         audio_16k: np.ndarray,
         forced_speaker_id: Optional[str] = None,
+        on_speaker_active: Optional[Callable[[str], None]] = None,
     ) -> List[TranscriptSegment]:
         rms = float(np.sqrt(np.mean(audio_16k**2))) if len(audio_16k) > 0 else 0.0
         chunk_start, _ = self.store.append_audio_pcm(session.id, audio_16k)
 
-        if rms < 0.003:
+        if rms < 0.0025:
             self.store.save_session(session)
             return []
 
         sub_intervals = segment_speech_by_energy(
-            audio_16k, min_speech_sec=0.45, max_segment_sec=12.0, min_silence_sec=0.35
+            audio_16k, min_speech_sec=0.85, max_segment_sec=14.0, min_silence_sec=0.6
         )
         if not sub_intervals:
             self.store.save_session(session)
@@ -567,13 +581,26 @@ class LocalSpeechPipeline:
                     sub_audio, embeddings_snapshot
                 )
 
+            if on_speaker_active:
+                try:
+                    on_speaker_active(spk_id)
+                except Exception:
+                    pass
+
             existing_spk = session.speakers.get(spk_id)
             assigned_lang = existing_spk.language if existing_spk else "auto"
+
+            # If speaker is on 'auto' and clip is short (< 2.2s), reuse the speaker's last detected language if available
+            effective_forced_lang = None if assigned_lang == "auto" else assigned_lang
+            if effective_forced_lang is None and len(sub_audio) < int(SAMPLE_RATE * 2.2):
+                prev_spk_segs = [s for s in session.segments if s.speaker_id == spk_id and s.source_language]
+                if prev_spk_segs:
+                    effective_forced_lang = prev_spk_segs[-1].source_language
 
             detected_lang, orig_text, trans_text, confidence = (
                 self.transcribe_and_translate_clip(
                     sub_audio,
-                    forced_language=None if assigned_lang == "auto" else assigned_lang,
+                    forced_language=effective_forced_lang,
                     target_language=session.target_language,
                     model_id=session.whisper_model,
                     translation_model=session.translation_model,
