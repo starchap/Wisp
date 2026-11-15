@@ -34,10 +34,120 @@ function stopPythonBackend() {
   } catch (_) {}
 }
 
+function startScriptFallback(envVars) {
+  const isWin = process.platform === 'win32';
+  const backendDir = app.isPackaged
+    ? path.join(process.resourcesPath, 'backend')
+    : path.resolve(__dirname, '..', '..', 'backend');
+  const mainScript = path.join(backendDir, 'main.py');
+
+  // Check if a signed embedded python.exe is bundled in backend-dist/python
+  if (app.isPackaged && isWin) {
+    const signedBundledPy = path.join(
+      process.resourcesPath,
+      'backend-dist',
+      'python',
+      'python.exe'
+    );
+    if (fs.existsSync(signedBundledPy)) {
+      try {
+        const proc = spawn(signedBundledPy, [mainScript], {
+          cwd: backendDir,
+          env: envVars,
+          stdio: 'ignore',
+          windowsHide: true,
+        });
+        pythonProcess = proc;
+        proc.on('error', () => {
+          spawnSystemPython(backendDir, mainScript, envVars);
+        });
+        return;
+      } catch (_) {}
+    }
+  }
+
+  spawnSystemPython(backendDir, mainScript, envVars);
+}
+
+function spawnSystemPython(backendDir, mainScript, envVars) {
+  const isWin = process.platform === 'win32';
+  const cmd = isWin ? 'py' : 'python3';
+  const args = isWin ? ['-3.10', mainScript] : [mainScript];
+
+  try {
+    const proc = spawn(cmd, args, {
+      cwd: backendDir,
+      env: envVars,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    pythonProcess = proc;
+    proc.on('error', (err) => {
+      console.log('[Electron] Fallback to python executable:', err.message);
+      try {
+        const fallbackProc = spawn('python', [mainScript], {
+          cwd: backendDir,
+          env: envVars,
+          stdio: 'ignore',
+          windowsHide: true,
+        });
+        pythonProcess = fallbackProc;
+        fallbackProc.on('error', () => {});
+      } catch (_) {}
+    });
+  } catch (e) {
+    console.error('[Electron] Could not spawn Python backend:', e);
+  }
+}
+
 function startPythonBackend() {
   const isWin = process.platform === 'win32';
+  const backendDir = app.isPackaged
+    ? path.join(process.resourcesPath, 'backend')
+    : path.resolve(__dirname, '..', '..', 'backend');
+  const mainScript = path.join(backendDir, 'main.py');
 
-  // 1. In packaged builds, prefer the bundled PyInstaller executable if present
+  const envVars = {
+    ...process.env,
+    WISP_PACKAGED: app.isPackaged ? '1' : '0',
+    PYTHONUTF8: '1',
+  };
+
+  // 1. On Windows packaged builds, prefer the DigiCert-signed embedded Python runtime
+  // (signed by Python Software Foundation so Windows Smart App Control never blocks it).
+  if (app.isPackaged && isWin) {
+    const signedPyDir = path.join(process.resourcesPath, 'backend-dist', 'python');
+    const signedPyExe = path.join(signedPyDir, 'python.exe');
+    if (fs.existsSync(signedPyExe)) {
+      try {
+        const proc = spawn(signedPyExe, ['-E', '-s', mainScript], {
+          cwd: backendDir,
+          env: {
+            ...envVars,
+            PYTHONHOME: signedPyDir,
+            PYTHONPATH: [
+              backendDir,
+              path.join(signedPyDir, 'Lib'),
+              path.join(signedPyDir, 'Lib', 'site-packages'),
+              path.join(signedPyDir, 'DLLs'),
+            ].join(path.delimiter),
+          },
+          stdio: ['ignore', 'ignore', 'ignore'],
+          windowsHide: true,
+        });
+        pythonProcess = proc;
+        proc.on('error', (err) => {
+          console.warn('[Electron] Signed embedded Python error, falling back:', err.message);
+          spawnSystemPython(backendDir, mainScript, envVars);
+        });
+        return;
+      } catch (e) {
+        console.error('[Electron] Failed to launch signed embedded Python:', e);
+      }
+    }
+  }
+
+  // 2. In packaged builds (macOS / Linux / fallback), use the bundled PyInstaller executable
   if (app.isPackaged) {
     const exeName = isWin ? 'wisp-backend.exe' : 'wisp-backend';
     const bundledExe = path.join(
@@ -48,10 +158,28 @@ function startPythonBackend() {
     );
     if (fs.existsSync(bundledExe)) {
       try {
-        pythonProcess = spawn(bundledExe, [], {
+        const proc = spawn(bundledExe, [], {
           cwd: path.dirname(bundledExe),
+          env: envVars,
           stdio: ['ignore', 'ignore', 'ignore'],
           windowsHide: true,
+        });
+        pythonProcess = proc;
+        let fellBack = false;
+        const triggerFallback = () => {
+          if (fellBack) return;
+          fellBack = true;
+          startScriptFallback(envVars);
+        };
+        proc.on('error', (err) => {
+          console.warn('[Electron] Bundled backend binary blocked or failed, falling back:', err.message);
+          triggerFallback();
+        });
+        proc.on('exit', (code) => {
+          if (code !== null && code !== 0) {
+            console.warn('[Electron] Bundled backend exited early with code', code, '- falling back');
+            triggerFallback();
+          }
         });
         return;
       } catch (e) {
@@ -60,32 +188,8 @@ function startPythonBackend() {
     }
   }
 
-  // 2. Development / Script fallback
-  const backendDir = app.isPackaged
-    ? path.join(process.resourcesPath, 'backend')
-    : path.resolve(__dirname, '..', '..', 'backend');
-  const mainScript = path.join(backendDir, 'main.py');
-
-  const cmd = isWin ? 'py' : 'python3';
-  const args = isWin ? ['-3.10', mainScript] : [mainScript];
-
-  try {
-    pythonProcess = spawn(cmd, args, {
-      cwd: backendDir,
-      stdio: 'ignore',
-      windowsHide: true,
-    });
-    pythonProcess.on('error', (err) => {
-      console.log('[Electron] Fallback to python executable:', err.message);
-      pythonProcess = spawn('python', [mainScript], {
-        cwd: backendDir,
-        stdio: 'ignore',
-        windowsHide: true,
-      });
-    });
-  } catch (e) {
-    console.error('[Electron] Could not spawn Python backend:', e);
-  }
+  // 3. Development / Script fallback
+  startScriptFallback(envVars);
 }
 
 function createWindow() {

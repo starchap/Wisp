@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List
 
-if getattr(sys, "frozen", False):
+if getattr(sys, "frozen", False) or os.environ.get("WISP_PACKAGED") == "1":
     BASE_DIR = Path.home() / ".wisp"
     BASE_DIR.mkdir(parents=True, exist_ok=True)
 else:
