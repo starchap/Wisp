@@ -2,8 +2,10 @@ import React, { useState } from 'react';
 import {
   Check,
   Copy,
+  Download,
   Edit2,
   FileAudio,
+  FolderOpen,
   Headphones,
   Languages,
   MessageSquare,
@@ -13,6 +15,10 @@ import {
   RefreshCw,
   Square,
 } from 'lucide-react';
+import {
+  getSessionAudioDownloadUrl,
+  openSessionAudioFolder,
+} from '../api';
 import { useI18n } from '../i18n';
 import {
   AudioDevice,
@@ -154,6 +160,30 @@ export const TranscriptFeed: React.FC<TranscriptFeedProps> = ({
             <span className="px-2 py-0.5 rounded-md bg-slate-800/80 border border-slate-700/70 text-[11px] text-slate-300 truncate max-w-[220px]">
               {session.source_file_name}
             </span>
+          )}
+
+          {(session.duration > 0 || session.segments.length > 0) && (
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => openSessionAudioFolder(session.id).catch(() => {})}
+                className="flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-700/80 text-slate-200 border border-slate-700/70 text-[11px] font-medium transition"
+                title="Open folder where this session's audio (.wav) and transcript are saved"
+              >
+                <FolderOpen className="w-3.5 h-3.5 text-amber-400" />
+                <span>Open Folder</span>
+              </button>
+
+              <a
+                href={getSessionAudioDownloadUrl(session.id)}
+                download
+                className="flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-700/80 text-slate-200 border border-slate-700/70 text-[11px] font-medium transition"
+                title="Download recorded session audio (.wav)"
+              >
+                <Download className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Download .WAV</span>
+              </a>
+            </div>
           )}
 
           {session.segments.length > 0 && (

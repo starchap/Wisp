@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  Download,
+  FolderOpen,
   Pause,
   Play,
   RotateCcw,
@@ -7,6 +9,10 @@ import {
   Volume2,
   VolumeX,
 } from 'lucide-react';
+import {
+  getSessionAudioDownloadUrl,
+  openSessionAudioFolder,
+} from '../api';
 import { MeetingSession, TranscriptSegment } from '../types';
 
 interface AudioPlayerBarProps {
@@ -110,9 +116,8 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
   const effectiveDuration = Math.max(duration, session?.duration || 0);
   const hideBottomBar =
     !session ||
-    session.session_type === 'live' ||
     isLiveRecording ||
-    effectiveDuration <= 0;
+    (effectiveDuration <= 0 && session.segments.length === 0);
 
   return (
     <>
@@ -200,8 +205,8 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
             </span>
           </div>
 
-          {/* Right: Speed & Mute */}
-          <div className="flex items-center gap-3">
+          {/* Right: Speed, Mute, Open Folder & Download WAV */}
+          <div className="flex items-center gap-2">
             <button
               onClick={changeSpeed}
               className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 border border-slate-700 transition"
@@ -217,6 +222,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
                 if (audioRef.current) audioRef.current.muted = next;
               }}
               className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
+              title={isMuted ? 'Unmute' : 'Mute'}
             >
               {isMuted ? (
                 <VolumeX className="w-4 h-4 text-rose-400" />
@@ -224,6 +230,30 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
                 <Volume2 className="w-4 h-4" />
               )}
             </button>
+
+            {session && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => openSessionAudioFolder(session.id).catch(() => {})}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200 border border-slate-700 transition"
+                  title="Open audio file location in Explorer / Finder"
+                >
+                  <FolderOpen className="w-3.5 h-3.5 text-amber-400" />
+                  <span className="hidden sm:inline">Folder</span>
+                </button>
+
+                <a
+                  href={getSessionAudioDownloadUrl(session.id)}
+                  download
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200 border border-slate-700 transition"
+                  title="Download recorded audio (.wav)"
+                >
+                  <Download className="w-3.5 h-3.5 text-emerald-400" />
+                  <span className="hidden sm:inline">.WAV</span>
+                </a>
+              </>
+            )}
           </div>
         </footer>
       )}

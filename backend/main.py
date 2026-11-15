@@ -359,16 +359,65 @@ def api_reprocess_session(session_id: str):
 
 
 @app.get("/api/sessions/{session_id}/audio")
-def api_get_session_audio(session_id: str):
-    """Serve the recorded WAV file for full playback and segment backtracking."""
+def api_get_session_audio(session_id: str, download: int = 0):
+    """Serve the recorded WAV file for full playback, segment backtracking, or direct download."""
+    session = store.get_session(session_id)
     audio_path = store.get_audio_path(session_id)
     if not audio_path.exists():
         raise HTTPException(status_code=404, detail="Audio recording not found")
+
+    safe_title = f"WispAI-{session_id}"
+    if session and session.title:
+        cleaned = "".join(c if (c.isalnum() or c in " -_") else "_" for c in session.title).strip()
+        if cleaned:
+            safe_title = cleaned.replace(" ", "_")
+
+    headers = {}
+    if download:
+        headers["Content-Disposition"] = f'attachment; filename="{safe_title}.wav"'
+
     return FileResponse(
         path=str(audio_path),
         media_type="audio/wav",
-        filename=f"{session_id}.wav",
+        filename=f"{safe_title}.wav",
+        headers=headers,
     )
+
+
+@app.post("/api/sessions/{session_id}/open-folder")
+def api_open_session_folder(session_id: str):
+    """Open the native OS file manager (Windows Explorer, macOS Finder, Linux) at the session's audio file."""
+    import os
+    import subprocess
+    import sys
+
+    session = store.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    audio_path = store.get_audio_path(session_id).resolve()
+    session_dir = audio_path.parent.resolve()
+    session_dir.mkdir(parents=True, exist_ok=True)
+
+    target_to_select = audio_path if audio_path.exists() else session_dir
+
+    try:
+        if sys.platform == "win32":
+            if audio_path.exists():
+                subprocess.Popen(["explorer", f"/select,{str(audio_path)}"])
+            else:
+                os.startfile(str(session_dir))  # type: ignore
+        elif sys.platform == "darwin":
+            if audio_path.exists():
+                subprocess.Popen(["open", "-R", str(audio_path)])
+            else:
+                subprocess.Popen(["open", str(session_dir)])
+        else:
+            subprocess.Popen(["xdg-open", str(session_dir)])
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not open folder: {exc}")
+
+    return {"opened": True, "path": str(target_to_select)}
 
 
 # ---------------------------------------------------------------------------

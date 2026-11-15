@@ -363,3 +363,16 @@ export function getSessionAudioUrl(sessionId: string, cacheBust?: number): strin
     cacheBust ? `?t=${cacheBust}` : ''
   }`;
 }
+
+export function getSessionAudioDownloadUrl(sessionId: string): string {
+  return `${API_BASE}/api/sessions/${sessionId}/audio?download=1`;
+}
+
+export async function openSessionAudioFolder(sessionId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/open-folder`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    throw new Error('Could not open session folder');
+  }
+}
