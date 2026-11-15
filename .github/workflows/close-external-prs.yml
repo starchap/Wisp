@@ -1,0 +1,22 @@
+name: Auto-Close External Pull Requests
+
+on:
+  pull_request_target:
+    types: [opened, reopened]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  close-pr:
+    name: Close External PR
+    if: github.event.pull_request.user.login != 'starchap'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Comment and Close Pull Request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr comment "$PR_NUMBER" --repo "${{ github.repository }}" --body "Thank you for your interest in **WispAI**! This repository is maintained exclusively by **@starchap** and does not accept external Pull Requests. If you have a bug report or feature suggestion, please open an Issue instead."
+          gh pr close "$PR_NUMBER" --repo "${{ github.repository }}"
