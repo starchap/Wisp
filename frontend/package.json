@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "WispAI — 100% Local AI Multi-Speaker Meeting Transcriber & Translator",
+  "description": "WispAI — 100% Local AI Multi-Speaker Meeting Transcriber and Translator",
   "author": "starchap",
   "license": "MIT",
   "homepage": "https://github.com/starchap/Wisp",
@@ -112,7 +112,7 @@
       "icon": "public/wisp-icon.png",
       "category": "AudioVideo;Audio;Utility;",
       "maintainer": "starchap <https://github.com/starchap/Wisp>",
-      "synopsis": "100% Offline Local AI Multi-Speaker Meeting Transcriber & Translator"
+      "synopsis": "100% Offline Local AI Multi-Speaker Meeting Transcriber and Translator"
     },
     "rpm": {
       "fpm": [
