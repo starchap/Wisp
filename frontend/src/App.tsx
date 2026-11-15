@@ -169,13 +169,16 @@ export function App() {
     mode: 'create',
   });
 
-  // Initial load of config & sessions
+  // Initial load of config & sessions (with automatic retry while local Python backend boots)
   useEffect(() => {
     let mounted = true;
+    let retryTimer: any = null;
+
     async function init() {
       try {
         const cfg = await fetchConfig();
         if (!mounted) return;
+        setErrorBanner(null);
         setConfig(cfg);
         setModelsStatus(cfg.models_status);
         setLiveState(cfg.live_state);
@@ -187,7 +190,7 @@ export function App() {
           cfg.audio_devices.loopbacks.find((d) => d.is_default)?.id ||
           cfg.audio_devices.loopbacks[0]?.id ||
           '';
-        setSelectedLoopback(defLb);
+        setSelectedLoopback((prev) => prev || defLb);
 
         const list = await fetchSessions();
         if (!mounted) return;
@@ -195,7 +198,7 @@ export function App() {
 
         if (list.length > 0) {
           const first = await fetchSession(list[0].id);
-          if (mounted) setActiveSession(first);
+          if (mounted) setActiveSession((prev) => prev || first);
         } else {
           if (mounted) setActiveSession(null);
         }
@@ -204,12 +207,14 @@ export function App() {
           setErrorBanner(
             'Waiting for local Python AI backend on http://127.0.0.1:8765 ...'
           );
+          retryTimer = setTimeout(init, 1500);
         }
       }
     }
     init();
     return () => {
       mounted = false;
+      if (retryTimer) clearTimeout(retryTimer);
     };
   }, []);
 

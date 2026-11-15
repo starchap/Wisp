@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="frontend/public/wisp-icon.png" width="110" height="110" alt="WispAI Logo" />
+  <img src="frontend/public/wisp-icon.png?v=2" width="110" height="110" alt="WispAI Logo" />
 </p>
 
 <h1 align="center">WispAI</h1>

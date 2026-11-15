@@ -78,10 +78,98 @@ interface SettingsModalProps {
   onClose: () => void;
 }
 
+const FALLBACK_MODELS_STATUS: ModelsStatus = {
+  storage_directory: '~/.wisp/data',
+  models_directory: '~/.wisp/data/models',
+  sessions_directory: '~/.wisp/data/sessions',
+  needs_onboarding: false,
+  whisper_models: [
+    {
+      id: 'tiny',
+      name: 'Whisper Tiny (~110 MB)',
+      description: 'Fastest, lowest memory usage. Great for quick tests.',
+      size_mb: '110',
+      downloaded: false,
+    },
+    {
+      id: 'base',
+      name: 'Whisper Base (~195 MB)',
+      description: 'Fast & lightweight for clear speech.',
+      size_mb: '195',
+      downloaded: false,
+    },
+    {
+      id: 'small',
+      name: 'Whisper Small (~610 MB) — Recommended',
+      description:
+        'Great balance of speed and multilingual accuracy (Danish, Spanish, English, etc.).',
+      size_mb: '610',
+      downloaded: false,
+    },
+    {
+      id: 'medium',
+      name: 'Whisper Medium (~1.7 GB)',
+      description: 'High accuracy for strong accents and noisy meetings.',
+      size_mb: '1700',
+      downloaded: false,
+    },
+    {
+      id: 'turbo',
+      name: 'Whisper Large-v3-Turbo (~1.6 GB)',
+      description: 'Near Large-v3 quality at much faster speed.',
+      size_mb: '1600',
+      downloaded: false,
+    },
+  ],
+  translation_models: [
+    {
+      id: 'opus-mt-da-en',
+      name: 'OPUS-MT Danish ↔ English Specialist (~85 MB) — Default',
+      description:
+        'Specialized Helsinki-NLP MarianMT neural translator tuned specifically for Danish ↔ English.',
+      size_mb: '85',
+      type: 'opus',
+      downloaded: false,
+    },
+    {
+      id: 'nllb-200-600M',
+      name: 'Meta NLLB-200 Universal (200 Languages, ~580 MB)',
+      description:
+        'Heavyweight 200-language neural machine translator for any-to-any language combinations.',
+      size_mb: '580',
+      type: 'nllb',
+      downloaded: false,
+    },
+    {
+      id: 'whisper-native',
+      name: 'Whisper Direct Audio-to-English Translator (0 MB extra)',
+      description:
+        "Uses Whisper's built-in acoustic translation head to translate speech directly into English.",
+      size_mb: '0',
+      type: 'whisper',
+      downloaded: true,
+    },
+  ],
+  speaker_diarization: {
+    id: '3dspeaker-eres2net',
+    name: '3D-Speaker ERes2Net Voice Diarization',
+    size_mb: '26',
+    downloaded: false,
+    local_path: '',
+  },
+  translator: {
+    id: 'opus-mt-da-en',
+    name: 'OPUS-MT Danish ↔ English Specialist',
+    size_mb: '85',
+    downloaded: false,
+    local_path: '',
+  },
+};
+
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen,
   initialTab = 'models',
-  modelsStatus,
+  modelsStatus: rawModelsStatus,
   languages,
   audioDevices,
   defaultOutputLanguage,
@@ -102,6 +190,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 }) => {
   const { t, uiLanguage, setUiLanguage, theme, setTheme } = useI18n();
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
+  const modelsStatus = rawModelsStatus || FALLBACK_MODELS_STATUS;
 
   useEffect(() => {
     if (isOpen && initialTab) {
@@ -109,7 +198,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   }, [isOpen, initialTab]);
 
-  if (!isOpen || !modelsStatus) return null;
+  if (!isOpen) return null;
 
   const outputLanguages = languages.filter((l) => l.code !== 'auto');
 
@@ -1762,13 +1851,14 @@ interface OnboardingWizardModalProps {
 
 export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
   isOpen,
-  modelsStatus,
+  modelsStatus: rawModelsStatus,
   progressText,
   isBusy,
   onStorageUpdated,
   onComplete,
 }) => {
   const { t, uiLanguage, setUiLanguage, theme, setTheme } = useI18n();
+  const modelsStatus = rawModelsStatus || FALLBACK_MODELS_STATUS;
   const [step, setStep] = useState<1 | 2>(1);
   const [storagePathInput, setStoragePathInput] = useState<string>('');
   const [pathSavedNotice, setPathSavedNotice] = useState(false);
@@ -1791,7 +1881,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
     }
   }, [isOpen, modelsStatus?.storage_directory, modelsStatus?.models_directory]);
 
-  if (!isOpen || !modelsStatus) return null;
+  if (!isOpen) return null;
 
   const spkDownloaded = modelsStatus.speaker_diarization.downloaded;
   const chosenWhisperObj = modelsStatus.whisper_models.find(
