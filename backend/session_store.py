@@ -145,6 +145,7 @@ def decode_audio_to_16k_mono(raw_bytes: bytes, filename: str = "audio.wav") -> n
                     check=True,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 )
             mono, _ = sf.read(out_path, dtype="float32", always_2d=False)
             return mono.astype(np.float32)

@@ -922,5 +922,23 @@ async def websocket_endpoint(websocket: WebSocket):
 
 
 if __name__ == "__main__":
+    import multiprocessing
+    import os
+    import sys
     import uvicorn
-    uvicorn.run("main:app", host="127.0.0.1", port=8765, reload=False)
+
+    multiprocessing.freeze_support()
+
+    # When running as a bundled PyInstaller executable without an attached console,
+    # ensure sys.stdout and sys.stderr are valid streams so uvicorn logging never fails.
+    if sys.stdout is None or sys.stderr is None:
+        log_path = config.BASE_DIR / "backend.log"
+        log_stream = open(log_path, "a", encoding="utf-8", buffering=1)
+        if sys.stdout is None:
+            sys.stdout = log_stream
+        if sys.stderr is None:
+            sys.stderr = log_stream
+
+    # Pass the `app` instance directly (not `"main:app"`) so PyInstaller frozen binaries
+    # do not fail trying to dynamically import `"main"`.
+    uvicorn.run(app, host="127.0.0.1", port=8765, reload=False, log_config=None)

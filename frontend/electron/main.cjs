@@ -18,6 +18,22 @@ ipcMain.handle('wisp:selectDirectory', async (_event, defaultPath) => {
   return result.filePaths[0];
 });
 
+function stopPythonBackend() {
+  if (!pythonProcess) return;
+  const proc = pythonProcess;
+  pythonProcess = null;
+  try {
+    if (process.platform === 'win32' && proc.pid) {
+      spawn('taskkill', ['/pid', String(proc.pid), '/f', '/t'], {
+        windowsHide: true,
+        stdio: 'ignore',
+      });
+    } else {
+      proc.kill('SIGTERM');
+    }
+  } catch (_) {}
+}
+
 function startPythonBackend() {
   const isWin = process.platform === 'win32';
 
@@ -34,7 +50,7 @@ function startPythonBackend() {
       try {
         pythonProcess = spawn(bundledExe, [], {
           cwd: path.dirname(bundledExe),
-          stdio: 'inherit',
+          stdio: ['ignore', 'ignore', 'ignore'],
           windowsHide: true,
         });
         return;
@@ -56,14 +72,14 @@ function startPythonBackend() {
   try {
     pythonProcess = spawn(cmd, args, {
       cwd: backendDir,
-      stdio: 'inherit',
+      stdio: 'ignore',
       windowsHide: true,
     });
     pythonProcess.on('error', (err) => {
       console.log('[Electron] Fallback to python executable:', err.message);
       pythonProcess = spawn('python', [mainScript], {
         cwd: backendDir,
-        stdio: 'inherit',
+        stdio: 'ignore',
         windowsHide: true,
       });
     });
@@ -124,40 +140,52 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(() => {
-  // Technical Privacy Guarantee: Block any outbound network requests from the UI renderer
-  // except local loopback (127.0.0.1 / localhost) and local file/blob/data protocols.
-  session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
-    const url = details.url || '';
-    const isAllowedLocal =
-      url.startsWith('file://') ||
-      url.startsWith('data:') ||
-      url.startsWith('blob:') ||
-      url.startsWith('devtools://') ||
-      url.startsWith('chrome-extension://') ||
-      url.startsWith('http://127.0.0.1:') ||
-      url.startsWith('ws://127.0.0.1:') ||
-      url.startsWith('http://localhost:') ||
-      url.startsWith('ws://localhost:');
-    callback({ cancel: !isAllowedLocal });
+const gotSingleLock = app.requestSingleInstanceLock();
+if (!gotSingleLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
   });
 
-  if (process.env.SKIP_BACKEND_SPAWN !== '1') {
-    startPythonBackend();
-  }
-  createWindow();
+  app.whenReady().then(() => {
+    // Technical Privacy Guarantee: Block any outbound network requests from the UI renderer
+    // except local loopback (127.0.0.1 / localhost) and local file/blob/data protocols.
+    session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
+      const url = details.url || '';
+      const isAllowedLocal =
+        url.startsWith('file://') ||
+        url.startsWith('data:') ||
+        url.startsWith('blob:') ||
+        url.startsWith('devtools://') ||
+        url.startsWith('chrome-extension://') ||
+        url.startsWith('http://127.0.0.1:') ||
+        url.startsWith('ws://127.0.0.1:') ||
+        url.startsWith('http://localhost:') ||
+        url.startsWith('ws://localhost:');
+      callback({ cancel: !isAllowedLocal });
+    });
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (process.env.SKIP_BACKEND_SPAWN !== '1') {
+      startPythonBackend();
+    }
+    createWindow();
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    });
   });
+}
+
+app.on('before-quit', () => {
+  stopPythonBackend();
 });
 
 app.on('window-all-closed', () => {
-  if (pythonProcess) {
-    try {
-      pythonProcess.kill();
-    } catch (_) {}
-  }
+  stopPythonBackend();
   if (process.platform !== 'darwin') {
     app.quit();
   }

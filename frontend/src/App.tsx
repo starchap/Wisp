@@ -169,12 +169,14 @@ export function App() {
     mode: 'create',
   });
 
-  // Initial load of config & sessions (with automatic retry while local Python backend boots)
+  // Initial load of config & sessions (with automatic retry while embedded AI engine boots)
   useEffect(() => {
     let mounted = true;
     let retryTimer: any = null;
+    let attempts = 0;
 
     async function init() {
+      attempts += 1;
       try {
         const cfg = await fetchConfig();
         if (!mounted) return;
@@ -210,10 +212,10 @@ export function App() {
         }
       } catch (err: any) {
         if (mounted) {
-          setErrorBanner(
-            'Waiting for local Python AI backend on http://127.0.0.1:8765 ...'
-          );
-          retryTimer = setTimeout(init, 1500);
+          if (attempts >= 8) {
+            setErrorBanner('Starting embedded local AI engine...');
+          }
+          retryTimer = setTimeout(init, 800);
         }
       }
     }
