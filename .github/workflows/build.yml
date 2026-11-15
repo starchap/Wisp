@@ -15,6 +15,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   build-desktop:
@@ -73,8 +74,47 @@ jobs:
       - name: Build Frontend & Package Desktop Executables
         working-directory: frontend
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: false
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.WIN_CSC_LINK != '' }}
         run: npm run ${{ matrix.dist_script }}
+
+      - name: Check SignPath Code Signing Configuration (Windows)
+        id: signpath_config
+        if: runner.os == 'Windows'
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SIGNPATH_ORGANIZATION_ID: ${{ secrets.SIGNPATH_ORGANIZATION_ID || vars.SIGNPATH_ORGANIZATION_ID }}
+        run: |
+          if (-not [string]::IsNullOrWhiteSpace($env:SIGNPATH_API_TOKEN) -and -not [string]::IsNullOrWhiteSpace($env:SIGNPATH_ORGANIZATION_ID)) {
+            "enabled=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            Write-Host "SignPath code signing is configured and enabled."
+          } else {
+            "enabled=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            Write-Host "SignPath secrets not configured yet — skipping remote code signing."
+          }
+
+      - name: Upload Unsigned Windows Executables for SignPath
+        id: upload_unsigned_win
+        if: runner.os == 'Windows' && steps.signpath_config.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-windows-executables
+          path: |
+            frontend/release/*.exe
+            frontend/release/*.zip
+
+      - name: Sign Windows Executables with SignPath.io
+        if: runner.os == 'Windows' && steps.signpath_config.outputs.enabled == 'true'
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID || vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ secrets.SIGNPATH_PROJECT_SLUG || vars.SIGNPATH_PROJECT_SLUG || 'wisp' }}
+          signing-policy-slug: ${{ secrets.SIGNPATH_POLICY_SLUG || vars.SIGNPATH_POLICY_SLUG || 'release-signing' }}
+          github-artifact-id: ${{ steps.upload_unsigned_win.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: frontend/release
 
       - name: Upload Built Executables Artifact (${{ matrix.platform_name }})
         uses: actions/upload-artifact@v4
@@ -82,6 +122,7 @@ jobs:
           name: Wisp-${{ matrix.platform_name }}
           path: |
             frontend/release/*.exe
+            frontend/release/*.appx
             frontend/release/*.dmg
             frontend/release/*.zip
             frontend/release/*.deb
@@ -98,6 +139,7 @@ jobs:
       - name: Download all platform artifacts
         uses: actions/download-artifact@v4
         with:
+          pattern: Wisp-*
           path: release-assets
 
       - name: Clean up previous releases and stale assets
@@ -112,18 +154,61 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.0.0' }}
-          name: ${{ startsWith(github.ref, 'refs/tags/') && format('Wisp {0}', github.ref_name) || 'Wisp v1.0.0 (Latest Build)' }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && format('WispAI {0}', github.ref_name) || 'WispAI v1.0.0 (Latest Build)' }}
           body: |
-            ### Wisp — 100% Offline Local AI Meeting Transcriber & Translator
+            ### WispAI — 100% Offline Local AI Meeting Transcriber & Translator
             Download the installer for your operating system below:
-            - **Windows:** `Wisp-Setup-1.0.0.exe` (Installer) or `Wisp-1.0.0-win.zip` (Portable ZIP)
-            - **macOS (Apple Silicon):** `Wisp-1.0.0-arm64.dmg` or `Wisp-1.0.0-arm64-mac.zip`
-            - **Linux (Ubuntu / Debian):** `wisp-desktop_1.0.0_amd64.deb` or `Wisp-1.0.0.AppImage`
+            - **Windows:** `WispAI-Setup-1.0.0.exe` (Installer), `WispAI-1.0.0.appx` (Microsoft Store Package), or `WispAI-1.0.0-win.zip` (Portable ZIP)
+            - **macOS (Apple Silicon):** `WispAI-1.0.0-arm64.dmg` or `WispAI-1.0.0-arm64-mac.zip`
+            - **Linux (Ubuntu / Debian):** `wisp-desktop_1.0.0_amd64.deb` or `WispAI-1.0.0.AppImage`
             - **Linux (Fedora / Red Hat):** `wisp-desktop-1.0.0.x86_64.rpm`
           files: |
             release-assets/**/*.exe
+            release-assets/**/*.appx
             release-assets/**/*.dmg
             release-assets/**/*.zip
             release-assets/**/*.deb
             release-assets/**/*.rpm
             release-assets/**/*.AppImage
+
+      - name: Check Microsoft Store Auto-Publish Credentials
+        id: msstore_config
+        env:
+          MSSTORE_TENANT_ID: ${{ secrets.MSSTORE_TENANT_ID }}
+          MSSTORE_CLIENT_ID: ${{ secrets.MSSTORE_CLIENT_ID }}
+          MSSTORE_CLIENT_SECRET: ${{ secrets.MSSTORE_CLIENT_SECRET }}
+          MSSTORE_SELLER_ID: ${{ secrets.MSSTORE_SELLER_ID }}
+        run: |
+          if [ -n "$MSSTORE_TENANT_ID" ] && [ -n "$MSSTORE_CLIENT_ID" ] && [ -n "$MSSTORE_CLIENT_SECRET" ] && [ -n "$MSSTORE_SELLER_ID" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "Microsoft Store credentials found — automatic Store submission enabled."
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Microsoft Store API secrets not configured yet — skipping automatic Store submission."
+          fi
+
+      - name: Set up Microsoft Store CLI
+        if: steps.msstore_config.outputs.enabled == 'true'
+        uses: microsoft/setup-msstore-cli@v1
+
+      - name: Configure Microsoft Store CLI & Publish .appx Package
+        if: steps.msstore_config.outputs.enabled == 'true'
+        env:
+          MSSTORE_TENANT_ID: ${{ secrets.MSSTORE_TENANT_ID }}
+          MSSTORE_CLIENT_ID: ${{ secrets.MSSTORE_CLIENT_ID }}
+          MSSTORE_CLIENT_SECRET: ${{ secrets.MSSTORE_CLIENT_SECRET }}
+          MSSTORE_SELLER_ID: ${{ secrets.MSSTORE_SELLER_ID }}
+          MSSTORE_PRODUCT_ID: ${{ secrets.MSSTORE_PRODUCT_ID || vars.MSSTORE_PRODUCT_ID }}
+        run: |
+          msstore reconfigure \
+            --tenantId "$MSSTORE_TENANT_ID" \
+            --clientId "$MSSTORE_CLIENT_ID" \
+            --clientSecret "$MSSTORE_CLIENT_SECRET" \
+            --sellerId "$MSSTORE_SELLER_ID"
+          APPX_FILE=$(find release-assets -name "*.appx" | head -n 1)
+          echo "Publishing $APPX_FILE to Microsoft Store..."
+          if [ -n "$MSSTORE_PRODUCT_ID" ]; then
+            msstore publish "$APPX_FILE" --id "$MSSTORE_PRODUCT_ID"
+          else
+            msstore publish "$APPX_FILE"
+          fi

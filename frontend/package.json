@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Wisp — 100% Local AI Multi-Speaker Meeting Transcriber & Translator",
+  "description": "WispAI — 100% Local AI Multi-Speaker Meeting Transcriber & Translator",
   "author": "starchap",
   "license": "MIT",
   "homepage": "https://github.com/starchap/Wisp",
@@ -12,7 +12,7 @@
     "dev:vite": "vite --port 5173",
     "dev:electron": "electron .",
     "build": "tsc -b && vite build",
-    "dist:win": "npm run build && electron-builder --win nsis portable zip",
+    "dist:win": "npm run build && electron-builder --win nsis portable zip appx",
     "dist:mac": "npm run build && electron-builder --mac dmg zip",
     "dist:linux": "npm run build && electron-builder --linux deb rpm AppImage"
   },
@@ -35,7 +35,7 @@
   },
   "build": {
     "appId": "com.starchap.wisp",
-    "productName": "Wisp",
+    "productName": "WispAI",
     "directories": {
       "output": "release"
     },
@@ -67,9 +67,22 @@
       "target": [
         "nsis",
         "portable",
-        "zip"
+        "zip",
+        "appx"
       ],
       "icon": "public/wisp-icon.ico"
+    },
+    "appx": {
+      "identityName": "StarChap.WispAI",
+      "publisher": "CN=3C3E462B-C8B7-4B89-9DA4-2BAFE58FF6F2",
+      "publisherDisplayName": "StarChap",
+      "displayName": "WispAI",
+      "applicationId": "WispAI",
+      "languages": [
+        "en-US",
+        "da-DK"
+      ],
+      "artifactName": "${productName}-${version}.${ext}"
     },
     "nsis": {
       "oneClick": false,

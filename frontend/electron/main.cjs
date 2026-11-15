@@ -8,7 +8,7 @@ let pythonProcess = null;
 
 ipcMain.handle('wisp:selectDirectory', async (_event, defaultPath) => {
   const result = await dialog.showOpenDialog(mainWindow, {
-    title: 'Select Wisp Storage Folder (Models & Recordings)',
+    title: 'Select WispAI Storage Folder (Models & Recordings)',
     defaultPath: defaultPath || undefined,
     properties: ['openDirectory', 'createDirectory'],
   });
@@ -83,7 +83,7 @@ function createWindow() {
     height: 900,
     minWidth: 1080,
     minHeight: 700,
-    title: 'Wisp',
+    title: 'WispAI',
     icon: iconFile,
     backgroundColor: '#020617',
     autoHideMenuBar: true,

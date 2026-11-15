@@ -94,11 +94,11 @@ export const TRANSLATIONS: Record<UILanguage, Record<string, string>> = {
     tabModels: 'Local AI Models',
     tabLanguages: 'Language & Output',
     tabAudio: 'Sound & Audio Input',
-    tabAbout: 'About Wisp',
+    tabAbout: 'About WispAI',
     done: 'Done',
     uiLanguageTitle: 'Interface Language (UI)',
     uiLanguageDesc:
-      'Change the language used across all menus, buttons, and dialogs in Wisp',
+      'Change the language used across all menus, buttons, and dialogs in WispAI',
     themeTitle: 'Appearance Theme',
     themeDesc:
       'Choose Dark, Light, or automatically match your operating system theme',
@@ -136,24 +136,24 @@ export const TRANSLATIONS: Record<UILanguage, Record<string, string>> = {
     systemLoopbackTitle:
       'System Audio Output Loopback (Teams / Huddle / Zoom)',
     systemLoopbackDesc:
-      'Select which speaker/headphone output Wisp should listen in on during live meetings.',
+      'Select which speaker/headphone output WispAI should listen in on during live meetings.',
     micInputDeviceTitle: 'Microphone Input Device',
     micInputDeviceDesc:
       'Select your microphone to record your own voice alongside the meeting participants.',
     aboutSubtitle: 'Version 1.0.0 • Cross-Platform Local AI Desktop App',
     aboutP1:
-      'Wisp is built for sales and project teams who need fast, accurate multi-speaker meeting transcriptions and translations without ever sending confidential customer audio to the cloud.',
+      'WispAI is built for sales and project teams who need fast, accurate multi-speaker meeting transcriptions and translations without ever sending confidential customer audio to the cloud.',
     aboutP2:
       'Every step — from 3D-Speaker voice diarization to Whisper speech recognition and OPUS-MT / NLLB-200 neural translation — runs 100% locally on your Windows, macOS, or Linux machine, even completely offline.',
     zeroCloudBadge: 'Zero Cloud • 100% On-Device Privacy',
-    onboardingTitle: 'Welcome to Wisp — Initial Setup',
+    onboardingTitle: 'Welcome to WispAI — Initial Setup',
     onboardingSub:
-      'Set where Wisp stores your files and download the required offline AI models to get started.',
+      'Set where WispAI stores your files and download the required offline AI models to get started.',
     onboardingStep1: '1. Storage & Preferences',
     onboardingStep2: '2. Download AI Models',
-    storageLocationTitle: 'Where should Wisp store AI models & session recordings?',
+    storageLocationTitle: 'Where should WispAI store AI models & session recordings?',
     storageLocationDesc:
-      'Choose a folder on your computer. Wisp will create "models/" and "sessions/" inside it.',
+      'Choose a folder on your computer. WispAI will create "models/" and "sessions/" inside it.',
     browseFolder: 'Browse Folder...',
     applyPath: 'Save Path',
     pathSaved: 'Saved!',
@@ -164,7 +164,7 @@ export const TRANSLATIONS: Record<UILanguage, Record<string, string>> = {
     chooseTranslationModel: '3. Choose Local Translation AI Model',
     downloadSelectedModels: 'Download Selected Models & Setup',
     allRequiredReady: 'All required local AI models are downloaded and ready!',
-    startUsingWisp: 'Start Using Wisp',
+    startUsingWisp: 'Start Using WispAI',
     runSetupWizard: 'Setup Wizard',
     changeFolder: 'Change Folder...',
     deleteModel: 'Delete',
@@ -181,7 +181,7 @@ export const TRANSLATIONS: Record<UILanguage, Record<string, string>> = {
       'All meeting audio, speaker voiceprints, transcripts, and translations are processed strictly in local memory and stored only on your own disk. Nothing is ever uploaded to any cloud, server, or third party.',
     guarantee2Title: '2. Works 100% Offline (Air-Gapped Ready)',
     guarantee2Desc:
-      'Once your chosen AI models are downloaded locally, Wisp operates completely without an internet connection. The speech and translation pipeline never initiates network calls during use.',
+      'Once your chosen AI models are downloaded locally, WispAI operates completely without an internet connection. The speech and translation pipeline never initiates network calls during use.',
     guarantee3Title: '3. Enforced Localhost Firewall & Zero Telemetry',
     guarantee3Desc:
       'Enforced via Electron network request filtering and Content Security Policy (CSP): the app is technically locked to local loopback (127.0.0.1) with all telemetry disabled (DO_NOT_TRACK=1).',
@@ -190,9 +190,9 @@ export const TRANSLATIONS: Record<UILanguage, Record<string, string>> = {
       'All recordings (.wav) and transcripts (.json) live in your chosen local folder and are permanently removed from disk when deleted.',
     offlineReadyStatus: 'Offline Status: Ready for 100% Internet-Free Operation',
     offlineMissingModels: 'Offline Status: Download models in Local AI Models tab to enable offline use',
-    sponsorTitle: 'Support Wisp Development',
+    sponsorTitle: 'Support WispAI Development',
     sponsorDesc:
-      'Wisp is free, open-source, and 100% private. If Wisp saves you time in meetings, you can support its development via GitHub Sponsors.',
+      'WispAI is free, open-source, and 100% private. If WispAI saves you time in meetings, you can support its development via GitHub Sponsors.',
     sponsorBtn: 'Sponsor on GitHub',
   },
   da: {
@@ -277,11 +277,11 @@ export const TRANSLATIONS: Record<UILanguage, Record<string, string>> = {
     tabModels: 'Lokale AI Modeller',
     tabLanguages: 'Sprog & Output',
     tabAudio: 'Lyd Ind & Ud',
-    tabAbout: 'Om Wisp',
+    tabAbout: 'Om WispAI',
     done: 'Færdig',
     uiLanguageTitle: 'Brugerfladesprog (UI)',
     uiLanguageDesc:
-      'Vælg sproget for alle menuer, knapper og dialoger i Wisp',
+      'Vælg sproget for alle menuer, knapper og dialoger i WispAI',
     themeTitle: 'Tema & Udseende',
     themeDesc:
       'Vælg Mørk, Lys eller følg automatisk dit operativsystems tema',
@@ -318,24 +318,24 @@ export const TRANSLATIONS: Record<UILanguage, Record<string, string>> = {
       'Specialiseret neural oversætter til at oversætte talernes tekst til outputsproget',
     systemLoopbackTitle: 'Systemlyd Loopback (Teams / Huddle / Zoom)',
     systemLoopbackDesc:
-      'Vælg hvilken højttaler/hovedtelefon Wisp skal lytte med på under live-møder.',
+      'Vælg hvilken højttaler/hovedtelefon WispAI skal lytte med på under live-møder.',
     micInputDeviceTitle: 'Mikrofonindgang',
     micInputDeviceDesc:
       'Vælg din mikrofon for at optage din egen stemme sammen med mødedeltagerne.',
     aboutSubtitle: 'Version 1.0.0 • Lokal AI Desktop App',
     aboutP1:
-      'Wisp er bygget til salgs- og projektteams, der har brug for hurtig og præcis transskribering og oversættelse af møder med flere talere – uden nogensinde at sende fortrolig kundelyd i skyen.',
+      'WispAI er bygget til salgs- og projektteams, der har brug for hurtig og præcis transskribering og oversættelse af møder med flere talere – uden nogensinde at sende fortrolig kundelyd i skyen.',
     aboutP2:
       'Hvert trin – fra 3D-Speaker stemmegenkendelse til Whisper talegenkendelse og OPUS-MT / NLLB-200 neural oversættelse – kører 100% lokalt på din computer, selv helt uden internet.',
     zeroCloudBadge: 'Ingen Cloud • 100% Lokal Privatlivsbeskyttelse',
-    onboardingTitle: 'Velkommen til Wisp — Førstegangsopsætning',
+    onboardingTitle: 'Velkommen til WispAI — Førstegangsopsætning',
     onboardingSub:
-      'Vælg hvor Wisp skal gemme indhold og hent de nødvendige lokale AI-modeller for at komme i gang.',
+      'Vælg hvor WispAI skal gemme indhold og hent de nødvendige lokale AI-modeller for at komme i gang.',
     onboardingStep1: '1. Lagringsmappe & Udseende',
     onboardingStep2: '2. Hent AI-Modeller',
-    storageLocationTitle: 'Hvor skal Wisp gemme AI-modeller og mødeoptagelser?',
+    storageLocationTitle: 'Hvor skal WispAI gemme AI-modeller og mødeoptagelser?',
     storageLocationDesc:
-      'Vælg en mappe på din computer. Wisp opretter automatisk "models/" og "sessions/" i mappen.',
+      'Vælg en mappe på din computer. WispAI opretter automatisk "models/" og "sessions/" i mappen.',
     browseFolder: 'Vælg mappe...',
     applyPath: 'Gem sti',
     pathSaved: 'Gemt!',
@@ -346,7 +346,7 @@ export const TRANSLATIONS: Record<UILanguage, Record<string, string>> = {
     chooseTranslationModel: '3. Vælg Lokal AI Oversættelsesmodel',
     downloadSelectedModels: 'Hent Valgte Modeller & Gør Klar',
     allRequiredReady: 'Alle nødvendige lokale AI-modeller er hentet og klar!',
-    startUsingWisp: 'Start Wisp',
+    startUsingWisp: 'Start WispAI',
     runSetupWizard: 'Opsætningsguide',
     changeFolder: 'Skift mappe...',
     deleteModel: 'Slet',
@@ -363,7 +363,7 @@ export const TRANSLATIONS: Record<UILanguage, Record<string, string>> = {
       'Al møde-lyd, stemmeaftryk, transskriberinger og oversættelser behandles udelukkende lokalt på din maskine og gemmes kun på din egen disk. Intet sendes til skyen, eksterne servere eller tredjeparter.',
     guarantee2Title: '2. Kan bruges 100% Offline uden internet',
     guarantee2Desc:
-      'Så længe dine valgte AI-modeller ligger lokalt på computeren, fungerer Wisp helt uden internetforbindelse (f.eks. i flytilstand). Talegenkendelses- og oversættelsesmotoren foretager aldrig netværkskald under brug.',
+      'Så længe dine valgte AI-modeller ligger lokalt på computeren, fungerer WispAI helt uden internetforbindelse (f.eks. i flytilstand). Talegenkendelses- og oversættelsesmotoren foretager aldrig netværkskald under brug.',
     guarantee3Title: '3. Teknisk Netværksspærring & Nul Telemetri',
     guarantee3Desc:
       'Håndhævet via Electron netværksfilter og Content Security Policy (CSP): appen er teknisk låst til lokal loopback (127.0.0.1), og al telemetri/sporing er slået helt fra (DO_NOT_TRACK=1).',
@@ -372,9 +372,9 @@ export const TRANSLATIONS: Record<UILanguage, Record<string, string>> = {
       'Alle optagelser (.wav) og udskrifter (.json) ligger i din egen valgte mappe på computeren og slettes permanent fra disken, når du sletter dem i appen.',
     offlineReadyStatus: 'Offline-status: Klar til 100% offline brug uden internet',
     offlineMissingModels: 'Offline-status: Hent modeller under Lokale AI Modeller for 100% offline brug',
-    sponsorTitle: 'Støt udviklingen af Wisp',
+    sponsorTitle: 'Støt udviklingen af WispAI',
     sponsorDesc:
-      'Wisp er gratis, open-source og 100% privat. Hvis Wisp sparer dig tid i møder, kan du støtte projektet via GitHub Sponsors.',
+      'WispAI er gratis, open-source og 100% privat. Hvis WispAI sparer dig tid i møder, kan du støtte projektet via GitHub Sponsors.',
     sponsorBtn: 'Støt via GitHub Sponsors',
   },
   es: {
@@ -447,11 +447,11 @@ export const TRANSLATIONS: Record<UILanguage, Record<string, string>> = {
     tabModels: 'Modelos IA Locales',
     tabLanguages: 'Idioma y Salida',
     tabAudio: 'Audio de Entrada / Salida',
-    tabAbout: 'Acerca de Wisp',
+    tabAbout: 'Acerca de WispAI',
     done: 'Listo',
     uiLanguageTitle: 'Idioma de la Interfaz (UI)',
     uiLanguageDesc:
-      'Cambie el idioma de todos los menús, botones y diálogos de Wisp',
+      'Cambie el idioma de todos los menús, botones y diálogos de WispAI',
     themeTitle: 'Tema de Apariencia',
     themeDesc:
       'Elija Oscuro, Claro o sincronizar automáticamente con el sistema',
@@ -487,24 +487,24 @@ export const TRANSLATIONS: Record<UILanguage, Record<string, string>> = {
     defaultTranslationDesc: 'Traductor neuronal local hacia el idioma de salida',
     systemLoopbackTitle: 'Audio del Sistema (Teams / Huddle / Zoom)',
     systemLoopbackDesc:
-      'Seleccione qué salida de altavoz/auriculares debe escuchar Wisp.',
+      'Seleccione qué salida de altavoz/auriculares debe escuchar WispAI.',
     micInputDeviceTitle: 'Dispositivo de Micrófono',
     micInputDeviceDesc:
       'Seleccione su micrófono para grabar su propia voz.',
     aboutSubtitle: 'Versión 1.0.0 • App de Escritorio IA 100% Local',
     aboutP1:
-      'Wisp está diseñado para equipos que necesitan transcripciones y traducciones de reuniones precisas sin enviar audio confidencial a la nube.',
+      'WispAI está diseñado para equipos que necesitan transcripciones y traducciones de reuniones precisas sin enviar audio confidencial a la nube.',
     aboutP2:
       'Cada paso se ejecuta 100% localmente en su equipo Windows, macOS o Linux, incluso sin conexión a internet.',
     zeroCloudBadge: 'Cero Nube • 100% Privacidad en el Dispositivo',
-    onboardingTitle: 'Bienvenido a Wisp — Configuración Inicial',
+    onboardingTitle: 'Bienvenido a WispAI — Configuración Inicial',
     onboardingSub:
-      'Elija dónde guarda Wisp sus datos y descargue los modelos de IA locales necesarios.',
+      'Elija dónde guarda WispAI sus datos y descargue los modelos de IA locales necesarios.',
     onboardingStep1: '1. Carpeta y Preferencias',
     onboardingStep2: '2. Descargar Modelos IA',
-    storageLocationTitle: '¿Dónde debe guardar Wisp los modelos y grabaciones?',
+    storageLocationTitle: '¿Dónde debe guardar WispAI los modelos y grabaciones?',
     storageLocationDesc:
-      'Elija una carpeta en su equipo. Wisp creará "models/" y "sessions/" dentro de ella.',
+      'Elija una carpeta en su equipo. WispAI creará "models/" y "sessions/" dentro de ella.',
     browseFolder: 'Elegir carpeta...',
     applyPath: 'Guardar ruta',
     pathSaved: '¡Guardado!',
@@ -515,7 +515,7 @@ export const TRANSLATIONS: Record<UILanguage, Record<string, string>> = {
     chooseTranslationModel: '3. Elegir Modelo IA de Traducción Local',
     downloadSelectedModels: 'Descargar Modelos Seleccionados',
     allRequiredReady: '¡Todos los modelos locales requeridos están listos!',
-    startUsingWisp: 'Empezar a usar Wisp',
+    startUsingWisp: 'Empezar a usar WispAI',
     runSetupWizard: 'Asistente de Configuración',
     changeFolder: 'Cambiar carpeta...',
     deleteModel: 'Eliminar',
@@ -532,7 +532,7 @@ export const TRANSLATIONS: Record<UILanguage, Record<string, string>> = {
       'Todo el audio, las voces, transcripciones y traducciones se procesan únicamente en su equipo local y nunca se envían a servidores externos.',
     guarantee2Title: '2. Funciona 100% sin conexión a Internet',
     guarantee2Desc:
-      'Mientras tenga los modelos descargados localmente, Wisp funciona completamente sin conexión a internet.',
+      'Mientras tenga los modelos descargados localmente, WispAI funciona completamente sin conexión a internet.',
     guarantee3Title: '3. Bloqueo de Red Local (127.0.0.1) y Cero Telemetría',
     guarantee3Desc:
       'Bloqueado técnicamente mediante filtro de red Electron y CSP para comunicarse solo con 127.0.0.1 sin telemetría.',
@@ -541,9 +541,9 @@ export const TRANSLATIONS: Record<UILanguage, Record<string, string>> = {
       'Todas las grabaciones y sesiones se guardan en su carpeta local elegida.',
     offlineReadyStatus: 'Estado Offline: Listo para uso 100% sin internet',
     offlineMissingModels: 'Estado Offline: Descargue modelos para uso sin internet',
-    sponsorTitle: 'Apoyar el desarrollo de Wisp',
+    sponsorTitle: 'Apoyar el desarrollo de WispAI',
     sponsorDesc:
-      'Wisp es gratuito, de código abierto y 100% privado. Puedes apoyar el proyecto mediante GitHub Sponsors.',
+      'WispAI es gratuito, de código abierto y 100% privado. Puedes apoyar el proyecto mediante GitHub Sponsors.',
     sponsorBtn: 'Patrocinar en GitHub',
   },
   de: {
@@ -616,11 +616,11 @@ export const TRANSLATIONS: Record<UILanguage, Record<string, string>> = {
     tabModels: 'Lokale KI-Modelle',
     tabLanguages: 'Sprache & Ausgabe',
     tabAudio: 'Audio Ein- & Ausgang',
-    tabAbout: 'Über Wisp',
+    tabAbout: 'Über WispAI',
     done: 'Fertig',
     uiLanguageTitle: 'Oberflächensprache (UI)',
     uiLanguageDesc:
-      'Sprache für alle Menüs, Schaltflächen und Dialoge in Wisp ändern',
+      'Sprache für alle Menüs, Schaltflächen und Dialoge in WispAI ändern',
     themeTitle: 'Erscheinungsbild (Theme)',
     themeDesc:
       'Dunkel, Hell oder automatisch an das Betriebssystem anpassen',
@@ -662,18 +662,18 @@ export const TRANSLATIONS: Record<UILanguage, Record<string, string>> = {
       'Wählen Sie Ihr Mikrofon, um Ihre eigene Stimme mitaufzuzeichnen.',
     aboutSubtitle: 'Version 1.0.0 • Lokale KI-Desktop-App',
     aboutP1:
-      'Wisp wurde für Teams entwickelt, die schnelle Multi-Speaker-Transkriptionen und Übersetzungen benötigen, ohne vertrauliche Audiodaten in die Cloud zu senden.',
+      'WispAI wurde für Teams entwickelt, die schnelle Multi-Speaker-Transkriptionen und Übersetzungen benötigen, ohne vertrauliche Audiodaten in die Cloud zu senden.',
     aboutP2:
       'Jeder Schritt läuft zu 100 % lokal auf Ihrem Computer – auch komplett offline.',
     zeroCloudBadge: 'Zero Cloud • 100% Datenschutz auf dem Gerät',
-    onboardingTitle: 'Willkommen bei Wisp — Ersteinrichtung',
+    onboardingTitle: 'Willkommen bei WispAI — Ersteinrichtung',
     onboardingSub:
       'Legen Sie den Speicherort fest und laden Sie die erforderlichen lokalen KI-Modelle herunter.',
     onboardingStep1: '1. Speicherort & Darstellung',
     onboardingStep2: '2. KI-Modelle herunterladen',
-    storageLocationTitle: 'Wo soll Wisp KI-Modelle und Sitzungen speichern?',
+    storageLocationTitle: 'Wo soll WispAI KI-Modelle und Sitzungen speichern?',
     storageLocationDesc:
-      'Wählen Sie einen Ordner auf Ihrem Computer. Wisp erstellt darin "models/" und "sessions/".',
+      'Wählen Sie einen Ordner auf Ihrem Computer. WispAI erstellt darin "models/" und "sessions/".',
     browseFolder: 'Ordner wählen...',
     applyPath: 'Pfad speichern',
     pathSaved: 'Gespeichert!',
@@ -684,7 +684,7 @@ export const TRANSLATIONS: Record<UILanguage, Record<string, string>> = {
     chooseTranslationModel: '3. Lokales KI-Übersetzungsmodell wählen',
     downloadSelectedModels: 'Ausgewählte Modelle herunterladen',
     allRequiredReady: 'Alle erforderlichen lokalen KI-Modelle sind bereit!',
-    startUsingWisp: 'Wisp starten',
+    startUsingWisp: 'WispAI starten',
     runSetupWizard: 'Einrichtungsassistent',
     changeFolder: 'Ordner ändern...',
     deleteModel: 'Löschen',
@@ -701,7 +701,7 @@ export const TRANSLATIONS: Record<UILanguage, Record<string, string>> = {
       'Alle Audioaufnahmen, Stimmprofile, Transkripte und Übersetzungen werden ausschließlich lokal auf Ihrem Gerät verarbeitet.',
     guarantee2Title: '2. Funktioniert zu 100% Offline ohne Internet',
     guarantee2Desc:
-      'Sobald Ihre gewählten KI-Modelle lokal gespeichert sind, funktioniert Wisp komplett ohne Internetverbindung.',
+      'Sobald Ihre gewählten KI-Modelle lokal gespeichert sind, funktioniert WispAI komplett ohne Internetverbindung.',
     guarantee3Title: '3. Technische Netzwerksperre (127.0.0.1) & Null Telemetrie',
     guarantee3Desc:
       'Durch Electron-Netzwerkfilter und CSP technisch auf 127.0.0.1 beschränkt, jegliche Telemetrie ist deaktiviert.',
@@ -710,9 +710,9 @@ export const TRANSLATIONS: Record<UILanguage, Record<string, string>> = {
       'Alle Aufnahmen werden nur in Ihrem selbst gewählten lokalen Ordner gespeichert.',
     offlineReadyStatus: 'Offline-Status: Bereit für 100% Offline-Betrieb',
     offlineMissingModels: 'Offline-Status: Bitte Modelle für Offline-Betrieb laden',
-    sponsorTitle: 'Wisp-Entwicklung unterstützen',
+    sponsorTitle: 'WispAI-Entwicklung unterstützen',
     sponsorDesc:
-      'Wisp ist kostenlos, Open-Source und 100% privat. Unterstützen Sie die Weiterentwicklung über GitHub Sponsors.',
+      'WispAI ist kostenlos, Open-Source und 100% privat. Unterstützen Sie die Weiterentwicklung über GitHub Sponsors.',
     sponsorBtn: 'Auf GitHub sponsern',
   },
 };

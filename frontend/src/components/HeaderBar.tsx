@@ -60,11 +60,11 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
         <div className="flex items-center gap-2.5">
           <img
             src="./wisp-icon.png"
-            alt="Wisp"
+            alt="WispAI"
             className="w-9 h-9 rounded-xl object-cover shadow-lg shadow-indigo-500/25 shrink-0"
           />
           <span className="font-bold tracking-tight text-white text-lg">
-            Wisp
+            WispAI
           </span>
         </div>
 
