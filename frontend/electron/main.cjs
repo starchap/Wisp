@@ -111,6 +111,7 @@ function startPythonBackend() {
     ...process.env,
     WISP_PACKAGED: app.isPackaged ? '1' : '0',
     PYTHONUTF8: '1',
+    PYTHONDONTWRITEBYTECODE: '1',
   };
 
   // 1. On Windows packaged builds, prefer the DigiCert-signed embedded Python runtime
@@ -158,12 +159,6 @@ function startPythonBackend() {
     );
     if (fs.existsSync(bundledExe)) {
       try {
-        if (process.platform === 'darwin') {
-          try {
-            spawnSync('xattr', ['-cr', path.dirname(bundledExe)]);
-            spawnSync('chmod', ['+x', bundledExe]);
-          } catch (_) {}
-        }
         const proc = spawn(bundledExe, [], {
           cwd: path.dirname(bundledExe),
           env: envVars,

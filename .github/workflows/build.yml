@@ -89,8 +89,16 @@ jobs:
           print('Bundled DigiCert-signed Python runtime into', dst)
           "
 
-      - name: Bundle Python Local AI Backend with PyInstaller (macOS & Linux)
-        if: runner.os != 'Windows'
+      - name: Bundle Python Local AI Backend with PyInstaller (macOS Single-Binary for Clean Bundle Signing)
+        if: runner.os == 'macOS'
+        run: |
+          python -m pip install pyinstaller
+          pyinstaller --noconfirm --onefile --name wisp-backend --distpath backend-dist/wisp-backend --workpath backend-build --paths backend --exclude-module pytest --exclude-module unittest --exclude-module tkinter --exclude-module sklearn --exclude-module torch --exclude-module torchvision --exclude-module torchaudio --exclude-module tensorflow --exclude-module matplotlib --exclude-module pandas --collect-all sherpa_onnx --collect-all onnxruntime --collect-all sentencepiece --collect-all tokenizers --collect-all soundfile --collect-all soundcard --hidden-import uvicorn.logging --hidden-import uvicorn.loops.auto --hidden-import uvicorn.protocols.http.auto --hidden-import uvicorn.protocols.websockets.auto --hidden-import uvicorn.lifespan.on backend/main.py
+          chmod +x backend-dist/wisp-backend/wisp-backend
+          codesign --force --sign - backend-dist/wisp-backend/wisp-backend
+
+      - name: Bundle Python Local AI Backend with PyInstaller (Linux)
+        if: runner.os == 'Linux'
         run: |
           python -m pip install pyinstaller
           pyinstaller --noconfirm --onedir --contents-directory _i --name wisp-backend --distpath backend-dist --workpath backend-build --paths backend --exclude-module pytest --exclude-module unittest --exclude-module tkinter --exclude-module sklearn --exclude-module torch --exclude-module torchvision --exclude-module torchaudio --exclude-module tensorflow --exclude-module matplotlib --exclude-module pandas --collect-all sherpa_onnx --collect-all onnxruntime --collect-all sentencepiece --collect-all tokenizers --collect-all soundfile --collect-all soundcard --hidden-import uvicorn.logging --hidden-import uvicorn.loops.auto --hidden-import uvicorn.protocols.http.auto --hidden-import uvicorn.protocols.websockets.auto --hidden-import uvicorn.lifespan.on backend/main.py
@@ -107,6 +115,27 @@ jobs:
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
           CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.WIN_CSC_LINK != '' }}
         run: npm run ${{ matrix.dist_script }}
+
+      - name: Verify macOS App Bundle Signature & Smoke-Test Embedded Backend
+        if: runner.os == 'macOS'
+        run: |
+          APP_BUNDLE=$(find frontend/release -maxdepth 2 -name "WispAI.app" | head -n 1)
+          echo "Verifying strict macOS signature on: $APP_BUNDLE"
+          codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
+          echo "Smoke-testing embedded macOS backend binary..."
+          "$APP_BUNDLE/Contents/Resources/backend-dist/wisp-backend/wisp-backend" &
+          BACKEND_PID=$!
+          for i in $(seq 1 20); do
+            if curl -sf http://127.0.0.1:8765/api/config > /dev/null; then
+              echo "macOS embedded backend responded on http://127.0.0.1:8765/api/config !"
+              kill "$BACKEND_PID" || true
+              exit 0
+            fi
+            sleep 1
+          done
+          kill "$BACKEND_PID" || true
+          echo "ERROR: macOS embedded backend failed to respond within 20s"
+          exit 1
 
       - name: Check SignPath Code Signing Configuration (Windows)
         id: signpath_config
