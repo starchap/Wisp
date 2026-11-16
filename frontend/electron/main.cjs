@@ -1,7 +1,7 @@
 const { app, BrowserWindow, dialog, ipcMain, session, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 
 let mainWindow = null;
 let pythonProcess = null;
@@ -158,6 +158,12 @@ function startPythonBackend() {
     );
     if (fs.existsSync(bundledExe)) {
       try {
+        if (process.platform === 'darwin') {
+          try {
+            spawnSync('xattr', ['-cr', path.dirname(bundledExe)]);
+            spawnSync('chmod', ['+x', bundledExe]);
+          } catch (_) {}
+        }
         const proc = spawn(bundledExe, [], {
           cwd: path.dirname(bundledExe),
           env: envVars,
