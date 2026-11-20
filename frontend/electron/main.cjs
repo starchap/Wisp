@@ -100,6 +100,46 @@ function spawnSystemPython(backendDir, mainScript, envVars) {
   }
 }
 
+function unblockBundledBinaries(rootDir) {
+  const marker = path.join(rootDir, '.unblocked-v2');
+  if (fs.existsSync(marker)) return;
+
+  function walkAndRewrite(dir) {
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (_) {
+      return;
+    }
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walkAndRewrite(fullPath);
+      } else if (entry.isFile()) {
+        const lower = entry.name.toLowerCase();
+        if (
+          lower.endsWith('.pyd') ||
+          lower.endsWith('.dll') ||
+          lower.endsWith('.exe')
+        ) {
+          try {
+            const data = fs.readFileSync(fullPath);
+            const tmpPath = `${fullPath}.local`;
+            fs.writeFileSync(tmpPath, data);
+            fs.unlinkSync(fullPath);
+            fs.renameSync(tmpPath, fullPath);
+          } catch (_) {}
+        }
+      }
+    }
+  }
+
+  try {
+    walkAndRewrite(rootDir);
+    fs.writeFileSync(marker, 'ok', 'utf8');
+  } catch (_) {}
+}
+
 function startPythonBackend() {
   const isWin = process.platform === 'win32';
   const backendDir = app.isPackaged
@@ -121,6 +161,7 @@ function startPythonBackend() {
     const signedPyExe = path.join(signedPyDir, 'python.exe');
     if (fs.existsSync(signedPyExe)) {
       try {
+        unblockBundledBinaries(signedPyDir);
         const proc = spawn(signedPyExe, ['-s', '-B', mainScript], {
           cwd: backendDir,
           env: {
