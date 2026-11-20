@@ -7,9 +7,17 @@ Handles downloading, caching, and verifying local AI models:
 4. Sherpa-ONNX 3D-Speaker ONNX model for Speaker Diarization / Voice Embeddings
 """
 import shutil
+import ssl
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Dict, List
+
+try:
+    import certifi
+    HAS_CERTIFI = True
+except ImportError:
+    HAS_CERTIFI = False
 
 import config
 from config import (
@@ -24,19 +32,64 @@ from config import (
 WHISPER_MAP = {m["id"]: m for m in WHISPER_MODELS}
 
 
+def _get_ssl_contexts() -> List[ssl.SSLContext]:
+    """
+    Build SSL contexts for model downloads:
+    1. First try Mozilla CA bundle via `certifi` (or OS default store).
+    2. Fallback to `_create_unverified_context()` so macOS PyInstaller builds
+       (where `/Library/Frameworks/Python.framework/.../cert.pem` is absent)
+       and machines behind corporate TLS inspection proxies never fail with
+       `CERTIFICATE_VERIFY_FAILED`.
+    """
+    contexts: List[ssl.SSLContext] = []
+    if HAS_CERTIFI:
+        try:
+            contexts.append(ssl.create_default_context(cafile=certifi.where()))
+        except Exception:
+            pass
+    try:
+        contexts.append(ssl.create_default_context())
+    except Exception:
+        pass
+    try:
+        contexts.append(ssl._create_unverified_context())
+    except Exception:
+        pass
+    return contexts
+
+
+def _download_url_to_path(url: str, dest: Path) -> Path:
+    if dest.exists() and dest.stat().st_size > 0:
+        return dest
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = dest.with_suffix(dest.suffix + ".tmp")
+    last_err = None
+
+    for ctx in _get_ssl_contexts():
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "WispAI/1.0"})
+            with urllib.request.urlopen(req, timeout=180, context=ctx) as resp, open(
+                tmp_path, "wb"
+            ) as out_f:
+                shutil.copyfileobj(resp, out_f, length=1024 * 1024)
+            tmp_path.replace(dest)
+            return dest
+        except (urllib.error.URLError, ssl.SSLError) as err:
+            last_err = err
+            if "CERTIFICATE_VERIFY_FAILED" in str(err) or isinstance(err, ssl.SSLError):
+                continue
+            raise
+
+    if last_err is not None:
+        raise last_err
+    raise RuntimeError(f"Failed to download {url}")
+
+
 def hf_hub_download(repo_id: str, filename: str, local_dir: str) -> str:
     """Download a public model file directly from Hugging Face via standard-library urllib (zero native DLL dependencies)."""
     dest = Path(local_dir) / filename
-    if dest.exists() and dest.stat().st_size > 0:
-        return str(dest)
-    dest.parent.mkdir(parents=True, exist_ok=True)
     url = f"https://huggingface.co/{repo_id}/resolve/main/{filename}"
-    tmp_path = dest.with_suffix(dest.suffix + ".tmp")
-    req = urllib.request.Request(url, headers={"User-Agent": "WispAI/1.0"})
-    with urllib.request.urlopen(req, timeout=180) as resp, open(tmp_path, "wb") as out_f:
-        shutil.copyfileobj(resp, out_f, length=1024 * 1024)
-    tmp_path.replace(dest)
-    return str(dest)
+    return str(_download_url_to_path(url, dest))
 
 
 def get_whisper_model_dir(model_id: str) -> Path:
@@ -183,10 +236,9 @@ def ensure_speaker_model() -> Path:
     print(
         f"[ModelManager] Downloading Speaker Embedding ONNX model to {config.SPEAKER_EMBEDDING_MODEL_PATH} ..."
     )
-    tmp_path = config.SPEAKER_EMBEDDING_MODEL_PATH.with_suffix(".tmp")
-    urllib.request.urlretrieve(SPEAKER_EMBEDDING_MODEL_URL, str(tmp_path))
-    tmp_path.replace(config.SPEAKER_EMBEDDING_MODEL_PATH)
-    return config.SPEAKER_EMBEDDING_MODEL_PATH
+    return _download_url_to_path(
+        SPEAKER_EMBEDDING_MODEL_URL, config.SPEAKER_EMBEDDING_MODEL_PATH
+    )
 
 
 def ensure_nllb_model() -> Path:
