@@ -1,8 +1,10 @@
 """
-Local Speech-to-Text (Sherpa-ONNX Whisper INT8) and Specialized Offline Neural Machine Translation
+Local Speech-to-Text (Direct ONNX Runtime Whisper INT8 Engine) and Specialized Offline Neural Machine Translation
 (Helsinki-NLP OPUS-MT MarianMT ONNX INT8 focused on Danish <-> English + Spanish/German,
 Meta NLLB-200 ONNX INT8, and Whisper Native English Translation) Pipeline for Wishper.
+Uses Microsoft's digitally signed `onnxruntime` directly — zero unsigned `sherpa_onnx` or `scipy` DLLs.
 """
+import base64
 import json
 import threading
 import uuid
@@ -11,7 +13,6 @@ from typing import Callable, Dict, List, Optional, Tuple
 import numpy as np
 import onnxruntime as ort
 import sentencepiece as spm
-import sherpa_onnx
 from tokenizers import Tokenizer
 
 import config as app_config
@@ -371,9 +372,230 @@ class LocalONNXTranslationEngine:
         return opus_out or text
 
 
+_MEL_FILTERS_CACHE: Dict[int, np.ndarray] = {}
+_WHISPER_HANN_400 = (0.5 - 0.5 * np.cos(2.0 * np.pi * np.arange(400) / 400.0)).astype(np.float32)
+
+
+def _get_whisper_mel_filters(n_mels: int = 80, sr: int = SAMPLE_RATE, n_fft: int = 400) -> np.ndarray:
+    """Compute and cache exact OpenAI Whisper Slaney-normalized Mel filterbank matrix."""
+    if n_mels in _MEL_FILTERS_CACHE:
+        return _MEL_FILTERS_CACHE[n_mels]
+
+    f_min, f_max = 0.0, sr / 2.0
+    f_sp = 200.0 / 3.0
+    min_log_hz = 1000.0
+    min_log_mel = (min_log_hz - f_min) / f_sp
+    logstep = np.log(6.4) / 27.0
+
+    def hz_to_mel(hz):
+        hz = np.asarray(hz)
+        mel = (hz - f_min) / f_sp
+        mask = hz >= min_log_hz
+        return np.where(mask, min_log_mel + np.log(np.maximum(hz, 1e-10) / min_log_hz) / logstep, mel)
+
+    def mel_to_hz(mel):
+        mel = np.asarray(mel)
+        hz = f_min + f_sp * mel
+        mask = mel >= min_log_mel
+        return np.where(mask, min_log_hz * np.exp(logstep * (mel - min_log_mel)), hz)
+
+    mels = np.linspace(hz_to_mel(f_min), hz_to_mel(f_max), n_mels + 2)
+    hz = mel_to_hz(mels)
+    fftfreqs = np.linspace(0, sr / 2.0, 1 + n_fft // 2)
+    fdiff = np.diff(hz)
+    ramps = np.subtract.outer(hz, fftfreqs)
+    weights = np.zeros((n_mels, 1 + n_fft // 2), dtype=np.float32)
+    for i in range(n_mels):
+        lower = -ramps[i] / fdiff[i]
+        upper = ramps[i + 2] / fdiff[i + 1]
+        weights[i] = np.maximum(0.0, np.minimum(lower, upper))
+    enorm = 2.0 / (hz[2 : n_mels + 2] - hz[:n_mels])
+    weights *= enorm[:, np.newaxis]
+    _MEL_FILTERS_CACHE[n_mels] = weights
+    return weights
+
+
+def _whisper_log_mel_spectrogram(audio_16k: np.ndarray, n_mels: int = 80) -> np.ndarray:
+    """Compute [1, n_mels, 3000] 30-second padded Whisper log-Mel spectrogram in pure NumPy."""
+    n_samples = 480000  # 30s at 16kHz
+    if len(audio_16k) < n_samples:
+        padded = np.pad(audio_16k, (0, n_samples - len(audio_16k)))
+    else:
+        padded = audio_16k[:n_samples]
+    padded = np.ascontiguousarray(padded, dtype=np.float32)
+    pad_reflect = np.pad(padded, (200, 200), mode="reflect")
+    strides = (pad_reflect.strides[0] * 160, pad_reflect.strides[0])
+    frames = np.lib.stride_tricks.as_strided(pad_reflect, shape=(3000, 400), strides=strides) * _WHISPER_HANN_400
+    stft = np.fft.rfft(frames, n=400, axis=1)
+    magnitudes = np.abs(stft) ** 2
+    filters = _get_whisper_mel_filters(n_mels)
+    mel_spec = filters @ magnitudes.T
+    log_spec = np.log10(np.maximum(mel_spec, 1e-10))
+    log_spec = np.maximum(log_spec, log_spec.max() - 8.0)
+    log_spec = (log_spec + 4.0) / 4.0
+    return log_spec[np.newaxis, :, :].astype(np.float32)
+
+
+class WhisperONNXRunner:
+    """
+    Runs Whisper INT8 ONNX encoder + decoder directly via Microsoft's signed `onnxruntime.InferenceSession`.
+    Supports multilingual transcription, spoken language auto-detection, and direct English translation.
+    """
+
+    def __init__(self, model_id: str):
+        self.model_id = model_id
+        paths = resolve_local_whisper_model(model_id)
+        sess_opts = ort.SessionOptions()
+        sess_opts.intra_op_num_threads = 4
+        self.encoder = ort.InferenceSession(
+            str(paths["encoder"]),
+            sess_options=sess_opts,
+            providers=["CPUExecutionProvider"],
+        )
+        self.decoder = ort.InferenceSession(
+            str(paths["decoder"]),
+            sess_options=sess_opts,
+            providers=["CPUExecutionProvider"],
+        )
+        meta = self.encoder.get_modelmeta().custom_metadata_map
+        self.n_mels = int(meta.get("n_mels", 80))
+        self.n_text_layer = int(meta.get("n_text_layer", 6))
+        self.n_text_ctx = int(meta.get("n_text_ctx", 448))
+        self.n_text_state = int(meta.get("n_text_state", 512))
+        self.sot = int(meta.get("sot", 50258))
+        self.eot = int(meta.get("eot", 50257))
+        self.blank_id = int(meta.get("blank_id", 220))
+        self.transcribe_id = int(meta.get("transcribe", 50359))
+        self.translate_id = int(meta.get("translate", 50358))
+        self.no_timestamps = int(meta.get("no_timestamps", 50363))
+        self.no_speech = int(meta.get("no_speech", 50362))
+        self.is_multilingual = int(meta.get("is_multilingual", 1)) == 1
+
+        lang_codes = [c.strip() for c in meta.get("all_language_codes", "").split(",") if c.strip()]
+        lang_tokens = [int(x) for x in meta.get("all_language_tokens", "").split(",") if x.strip()]
+        self.lang_to_id: Dict[str, int] = dict(zip(lang_codes, lang_tokens))
+        self.id_to_lang: Dict[int, str] = dict(zip(lang_tokens, lang_codes))
+        self.lang_tokens_arr = np.array(lang_tokens, dtype=np.int64)
+
+        non_speech_str = meta.get("non_speech_tokens", "")
+        self.non_speech_ids = [int(x) for x in non_speech_str.split(",") if x.strip().lstrip("-").isdigit()]
+
+        self.tokens_map: Dict[int, bytes] = {}
+        with open(paths["tokens"], "r", encoding="utf-8") as f:
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) == 2:
+                    try:
+                        self.tokens_map[int(parts[1])] = base64.b64decode(parts[0])
+                    except Exception:
+                        pass
+
+    def encode_audio(self, audio_16k: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        mel = _whisper_log_mel_spectrogram(audio_16k, self.n_mels)
+        cross_k, cross_v = self.encoder.run(None, {"mel": mel})
+        return cross_k, cross_v
+
+    def detect_language_from_cross(self, cross_k: np.ndarray, cross_v: np.ndarray) -> str:
+        if not self.is_multilingual or len(self.lang_tokens_arr) == 0:
+            return "en"
+        self_k = np.zeros((self.n_text_layer, 1, self.n_text_ctx, self.n_text_state), dtype=np.float32)
+        self_v = np.zeros((self.n_text_layer, 1, self.n_text_ctx, self.n_text_state), dtype=np.float32)
+        logits, _, _ = self.decoder.run(
+            None,
+            {
+                "tokens": np.array([[self.sot]], dtype=np.int64),
+                "in_n_layer_self_k_cache": self_k,
+                "in_n_layer_self_v_cache": self_v,
+                "n_layer_cross_k": cross_k,
+                "n_layer_cross_v": cross_v,
+                "offset": np.array([0], dtype=np.int64),
+            },
+        )
+        lang_logits = logits[0, -1, self.lang_tokens_arr]
+        best_lang_tok = int(self.lang_tokens_arr[int(np.argmax(lang_logits))])
+        return self.id_to_lang.get(best_lang_tok, "da")
+
+    def decode_from_cross(
+        self,
+        cross_k: np.ndarray,
+        cross_v: np.ndarray,
+        language: str = "da",
+        task: str = "transcribe",
+        duration_sec: float = 10.0,
+    ) -> str:
+        self_k = np.zeros((self.n_text_layer, 1, self.n_text_ctx, self.n_text_state), dtype=np.float32)
+        self_v = np.zeros((self.n_text_layer, 1, self.n_text_ctx, self.n_text_state), dtype=np.float32)
+
+        if self.is_multilingual:
+            lang_id = self.lang_to_id.get(language, self.lang_to_id.get("da", self.sot + 1))
+            task_id = self.translate_id if task == "translate" else self.transcribe_id
+            init_seq = [self.sot, lang_id, task_id, self.no_timestamps]
+        else:
+            init_seq = [self.sot, self.no_timestamps]
+
+        init_tokens = np.array([init_seq], dtype=np.int64)
+        offset = np.array([0], dtype=np.int64)
+        logits, self_k, self_v = self.decoder.run(
+            None,
+            {
+                "tokens": init_tokens,
+                "in_n_layer_self_k_cache": self_k,
+                "in_n_layer_self_v_cache": self_v,
+                "n_layer_cross_k": cross_k,
+                "n_layer_cross_v": cross_v,
+                "offset": offset,
+            },
+        )
+        offset[0] = init_tokens.shape[1]
+
+        # Dynamic max tokens proportional to audio clip length to prevent silence hallucinations
+        max_tokens = min(220, max(24, int(duration_sec * 12)))
+        out_ids: List[int] = []
+
+        step_logits = logits[0, -1].copy()
+        # Suppress blank & non-speech on the very first token
+        step_logits[self.blank_id] = -1e9
+        step_logits[self.no_speech] = -1e9
+        step_logits[self.sot] = -1e9
+        step_logits[self.no_timestamps :] = -1e9
+        next_tok = int(np.argmax(step_logits))
+
+        while next_tok != self.eot and len(out_ids) < max_tokens:
+            if next_tok < self.eot:
+                out_ids.append(next_tok)
+            # Stop if degenerate single-token or 2-token repetition loop occurs
+            if len(out_ids) >= 6 and len(set(out_ids[-6:])) == 1:
+                out_ids = out_ids[:-5]
+                break
+            if len(out_ids) >= 8 and out_ids[-4:] == out_ids[-8:-4]:
+                out_ids = out_ids[:-4]
+                break
+
+            logits, self_k, self_v = self.decoder.run(
+                None,
+                {
+                    "tokens": np.array([[next_tok]], dtype=np.int64),
+                    "in_n_layer_self_k_cache": self_k,
+                    "in_n_layer_self_v_cache": self_v,
+                    "n_layer_cross_k": cross_k,
+                    "n_layer_cross_v": cross_v,
+                    "offset": offset,
+                },
+            )
+            offset[0] += 1
+            step_logits = logits[0, -1].copy()
+            step_logits[self.sot] = -1e9
+            step_logits[self.no_speech] = -1e9
+            step_logits[self.no_timestamps :] = -1e9
+            next_tok = int(np.argmax(step_logits))
+
+        raw_bytes = b"".join(self.tokens_map.get(t, b"") for t in out_ids)
+        return raw_bytes.decode("utf-8", errors="replace").strip()
+
+
 class LocalSpeechPipeline:
     """
-    Coordinates Sherpa-ONNX Whisper (speech recognition + spoken language ID),
+    Coordinates Direct ONNX Runtime Whisper (speech recognition + spoken language ID),
     LocalSpeakerDiarizer (speaker recognition), and LocalONNXTranslationEngine
     (OPUS-MT Danish <-> English Specialist, Meta NLLB-200, and Whisper Direct Translate).
     """
@@ -382,53 +604,34 @@ class LocalSpeechPipeline:
         self.store = session_store
         self.diarizer = LocalSpeakerDiarizer()
         self.translator = LocalONNXTranslationEngine()
-        self._recognizers: Dict[Tuple[str, str, str], sherpa_onnx.OfflineRecognizer] = {}
-        self._lang_detectors: Dict[str, sherpa_onnx.SpokenLanguageIdentification] = {}
+        self._whisper_runners: Dict[str, WhisperONNXRunner] = {}
         self._lock = threading.Lock()
         self.device = "onnx-cpu"
         self.compute_type = "int8"
         print(
-            "[SpeechPipeline] Initialized Sherpa-ONNX Whisper + 3D-Speaker + OPUS-MT (DA<->EN) & NLLB-200 Engine."
+            "[SpeechPipeline] Initialized Direct ONNX Runtime Whisper + 3D-Speaker + OPUS-MT (DA<->EN) & NLLB-200 Engine."
         )
 
-    def _get_lang_detector(
+    def _get_whisper_runner(
         self, model_id: str = DEFAULT_WHISPER_MODEL
-    ) -> Optional[sherpa_onnx.SpokenLanguageIdentification]:
-        if model_id in self._lang_detectors:
-            return self._lang_detectors[model_id]
+    ) -> WhisperONNXRunner:
+        if model_id in self._whisper_runners:
+            return self._whisper_runners[model_id]
         with self._lock:
-            if model_id in self._lang_detectors:
-                return self._lang_detectors[model_id]
-            try:
-                paths = resolve_local_whisper_model(model_id)
-                slid_cfg = sherpa_onnx.SpokenLanguageIdentificationConfig(
-                    whisper=sherpa_onnx.SpokenLanguageIdentificationWhisperConfig(
-                        encoder=str(paths["encoder"]),
-                        decoder=str(paths["decoder"]),
-                        tail_paddings=500,
-                    ),
-                    num_threads=2,
-                    debug=False,
-                    provider="cpu",
-                )
-                detector = sherpa_onnx.SpokenLanguageIdentification(slid_cfg)
-                self._lang_detectors[model_id] = detector
-                return detector
-            except Exception as exc:
-                print(f"[SpeechPipeline] Language detector init warning: {exc}")
-                return None
+            if model_id in self._whisper_runners:
+                return self._whisper_runners[model_id]
+            runner = WhisperONNXRunner(model_id)
+            self._whisper_runners[model_id] = runner
+            return runner
 
     def detect_spoken_language(
         self, audio_16k: np.ndarray, model_id: str = DEFAULT_WHISPER_MODEL
     ) -> str:
-        detector = self._get_lang_detector(model_id)
-        if detector is None:
-            return "da"
         try:
+            runner = self._get_whisper_runner(model_id)
             norm_audio = self._normalize_speech_clip(audio_16k)
-            stream = detector.create_stream()
-            stream.accept_waveform(SAMPLE_RATE, norm_audio.tolist())
-            lang = detector.compute(stream)
+            cross_k, cross_v = runner.encode_audio(norm_audio)
+            lang = runner.detect_language_from_cross(cross_k, cross_v)
             return lang.strip() if lang else "da"
         except Exception as exc:
             print(f"[SpeechPipeline] Language detect fallback to 'da': {exc}")
@@ -445,36 +648,6 @@ class LocalSpeechPipeline:
             return np.clip(centered * (0.82 / peak), -1.0, 1.0).astype(np.float32)
         return centered.astype(np.float32)
 
-    def _get_whisper_recognizer(
-        self,
-        model_id: str = DEFAULT_WHISPER_MODEL,
-        language: str = "en",
-        task: str = "transcribe",
-    ) -> sherpa_onnx.OfflineRecognizer:
-        lang_code = "" if (not language or language == "auto") else language
-        key = (model_id, lang_code, task)
-        if key in self._recognizers:
-            return self._recognizers[key]
-
-        with self._lock:
-            if key in self._recognizers:
-                return self._recognizers[key]
-
-            paths = resolve_local_whisper_model(model_id)
-            rec = sherpa_onnx.OfflineRecognizer.from_whisper(
-                encoder=str(paths["encoder"]),
-                decoder=str(paths["decoder"]),
-                tokens=str(paths["tokens"]),
-                language=lang_code,
-                task=task,
-                num_threads=4,
-                decoding_method="greedy_search",
-                debug=False,
-                provider="cpu",
-            )
-            self._recognizers[key] = rec
-            return rec
-
     def _run_whisper_clip(
         self,
         audio_16k: np.ndarray,
@@ -483,13 +656,11 @@ class LocalSpeechPipeline:
         task: str = "transcribe",
     ) -> str:
         norm_audio = self._normalize_speech_clip(audio_16k)
-        rec = self._get_whisper_recognizer(
-            model_id=model_id, language=language, task=task
-        )
-        stream = rec.create_stream()
-        stream.accept_waveform(SAMPLE_RATE, norm_audio.tolist())
-        rec.decode_stream(stream)
-        return stream.result.text.strip()
+        runner = self._get_whisper_runner(model_id)
+        cross_k, cross_v = runner.encode_audio(norm_audio)
+        lang_code = language if (language and language != "auto") else runner.detect_language_from_cross(cross_k, cross_v)
+        dur = len(audio_16k) / float(SAMPLE_RATE)
+        return runner.decode_from_cross(cross_k, cross_v, language=lang_code, task=task, duration_sec=dur)
 
     def transcribe_and_translate_clip(
         self,
@@ -507,17 +678,23 @@ class LocalSpeechPipeline:
         if len(audio_16k) < int(SAMPLE_RATE * 0.25):
             return forced_language or "en", "", "", 0.0
 
+        norm_audio = self._normalize_speech_clip(audio_16k)
+        runner = self._get_whisper_runner(model_id)
+        cross_k, cross_v = runner.encode_audio(norm_audio)
+        dur = len(audio_16k) / float(SAMPLE_RATE)
+
         if not forced_language or forced_language == "auto":
-            detected_lang = self.detect_spoken_language(audio_16k, model_id=model_id)
+            detected_lang = runner.detect_language_from_cross(cross_k, cross_v)
         else:
             detected_lang = forced_language
 
-        # Step 1: Transcribe in the speaker's spoken language
-        original_text = self._run_whisper_clip(
-            audio_16k,
-            model_id=model_id,
+        # Step 1: Transcribe in the speaker's spoken language (reusing the same encoded cross_k/cross_v!)
+        original_text = runner.decode_from_cross(
+            cross_k,
+            cross_v,
             language=detected_lang,
             task="transcribe",
+            duration_sec=dur,
         )
         if not original_text:
             return detected_lang, "", "", 1.0
@@ -526,11 +703,12 @@ class LocalSpeechPipeline:
         if detected_lang == target_language:
             translated_text = original_text
         elif translation_model == "whisper-native" and target_language == "en":
-            w_trans = self._run_whisper_clip(
-                audio_16k,
-                model_id=model_id,
+            w_trans = runner.decode_from_cross(
+                cross_k,
+                cross_v,
                 language=detected_lang,
                 task="translate",
+                duration_sec=dur,
             )
             translated_text = w_trans or original_text
         else:
@@ -865,12 +1043,7 @@ class LocalSpeechPipeline:
         """Release ONNX Runtime sessions from memory before deleting model files on disk."""
         with self._lock:
             if model_type == "whisper":
-                keys_to_remove = [
-                    k for k in self._recognizers if k[0] == model_id
-                ]
-                for k in keys_to_remove:
-                    self._recognizers.pop(k, None)
-                self._lang_detectors.pop(model_id, None)
+                self._whisper_runners.pop(model_id, None)
             elif model_type in ("opus", "opus-mt-da-en", "translation"):
                 self.translator._opus_cache.clear()
             elif model_type in ("nllb", "nllb-200-600M"):

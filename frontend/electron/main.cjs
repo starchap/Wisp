@@ -121,7 +121,7 @@ function startPythonBackend() {
     const signedPyExe = path.join(signedPyDir, 'python.exe');
     if (fs.existsSync(signedPyExe)) {
       try {
-        const proc = spawn(signedPyExe, ['-E', '-s', mainScript], {
+        const proc = spawn(signedPyExe, ['-s', '-B', mainScript], {
           cwd: backendDir,
           env: {
             ...envVars,

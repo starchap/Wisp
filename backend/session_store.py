@@ -15,7 +15,6 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import soundfile as sf
-from scipy.signal import resample_poly
 
 import config
 from config import (
@@ -86,21 +85,29 @@ class MeetingSession:
         }
 
 
+def _resample_1d_numpy(mono: np.ndarray, orig_sr: int, target_sr: int = SAMPLE_RATE) -> np.ndarray:
+    """Fast pure-NumPy audio resampler (eliminates scipy native Fortran DLL dependency)."""
+    if orig_sr == target_sr or len(mono) == 0:
+        return mono.astype(np.float32)
+    duration = len(mono) / float(orig_sr)
+    target_len = max(1, int(round(duration * target_sr)))
+    old_indices = np.linspace(0.0, len(mono) - 1, num=len(mono), dtype=np.float64)
+    new_indices = np.linspace(0.0, len(mono) - 1, num=target_len, dtype=np.float64)
+    return np.interp(new_indices, old_indices, mono).astype(np.float32)
+
+
 def decode_audio_to_16k_mono(raw_bytes: bytes, filename: str = "audio.wav") -> np.ndarray:
     """
     Decode audio bytes (.wav, .mp3, .flac, .ogg, .m4a, .webm, .mp4)
     into a 16kHz mono float32 numpy array in [-1.0, 1.0].
-    Uses `soundfile` (libsndfile supports WAV, MP3, FLAC, OGG natively) with `scipy.signal.resample_poly`.
+    Uses `soundfile` (libsndfile supports WAV, MP3, FLAC, OGG natively) with pure-NumPy resampling.
     """
     try:
         data, sr = sf.read(io.BytesIO(raw_bytes), dtype="float32", always_2d=True)
         # Mix down to mono
         mono = np.mean(data, axis=1).astype(np.float32)
         if sr != SAMPLE_RATE:
-            gcd = np.gcd(sr, SAMPLE_RATE)
-            up = SAMPLE_RATE // gcd
-            down = sr // gcd
-            mono = resample_poly(mono, up, down).astype(np.float32)
+            mono = _resample_1d_numpy(mono, sr, SAMPLE_RATE)
         return mono
     except Exception as first_err:
         # Fallback to native OS audio converters (macOS `afconvert` or `ffmpeg`) for .m4a / .mp4 / .aac

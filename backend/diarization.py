@@ -1,19 +1,12 @@
 """
 Local Speaker Diarization and Voice Identification Engine.
-Uses Sherpa-ONNX SpeakerEmbeddingExtractor (ERes2Net / 3D-Speaker ONNX model)
-with fallback MFCC spectral voiceprint features if the ONNX model hasn't been downloaded yet.
-Supports both:
-1. Online / Incremental speaker identification (matching each new speech segment against known speakers in the session)
-2. Full-file Agglomerative / Cosine clustering with automatic speaker count estimation.
+Uses Microsoft ONNX Runtime (`onnxruntime.InferenceSession`) directly with the 3D-Speaker
+ERes2Net ONNX model (and fallback spectral voiceprint features if the ONNX model hasn't been downloaded yet).
+Zero unsigned native C++/Fortran extensions (no `sherpa_onnx` or `scipy` required).
 """
 from typing import Dict, List, Optional, Tuple
 import numpy as np
-
-try:
-    import sherpa_onnx
-    HAS_SHERPA = True
-except ImportError:
-    HAS_SHERPA = False
+import onnxruntime as ort
 
 from models_manager import is_speaker_model_downloaded
 import config as app_config
@@ -29,36 +22,121 @@ def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / (norm_a * norm_b))
 
 
+def _build_fbank_matrix_80(sr: int = SAMPLE_RATE, n_fft: int = 512, n_mels: int = 80) -> np.ndarray:
+    mel_low = 1127.0 * np.log(1.0 + 20.0 / 700.0)
+    mel_high = 1127.0 * np.log(1.0 + 7600.0 / 700.0)
+    mels = np.linspace(mel_low, mel_high, n_mels + 2)
+    hz = 700.0 * (np.exp(mels / 1127.0) - 1.0)
+    bins = np.floor((n_fft + 1) * hz / float(sr)).astype(int)
+    fb = np.zeros((n_mels, n_fft // 2 + 1), dtype=np.float32)
+    for m in range(1, n_mels + 1):
+        f_l, f_c, f_r = bins[m - 1], bins[m], bins[m + 1]
+        for k in range(f_l, f_c):
+            if f_c > f_l:
+                fb[m - 1, k] = (k - f_l) / float(f_c - f_l)
+        for k in range(f_c, f_r):
+            if f_r > f_c:
+                fb[m - 1, k] = (f_r - k) / float(f_r - f_c)
+    return fb
+
+
+_FBANK_80 = _build_fbank_matrix_80()
+_HANN_400 = (0.5 - 0.5 * np.cos(2.0 * np.pi * np.arange(400) / 400.0)).astype(np.float32)
+
+
+def _extract_kaldi_fbank_80(audio_16k: np.ndarray) -> np.ndarray:
+    """Compute [1, T, 80] mean-normalized 80-dim log-Mel filterbank features for 3D-Speaker ONNX."""
+    if len(audio_16k) < 400:
+        audio_16k = np.pad(audio_16k, (0, 400 - len(audio_16k)))
+    audio_16k = np.ascontiguousarray(audio_16k, dtype=np.float32)
+    n_frames = max(1, (len(audio_16k) - 400) // 160 + 1)
+    strides = (audio_16k.strides[0] * 160, audio_16k.strides[0])
+    frames = np.lib.stride_tricks.as_strided(audio_16k, shape=(n_frames, 400), strides=strides) * _HANN_400
+    power = np.abs(np.fft.rfft(frames, n=512, axis=1)) ** 2
+    fbank = np.log(np.maximum(power @ _FBANK_80.T, 1e-10)).astype(np.float32)
+    fbank -= np.mean(fbank, axis=0, keepdims=True)
+    return fbank[np.newaxis, :, :]
+
+
+def _agglomerative_average_cosine_numpy(
+    embs: np.ndarray,
+    num_speakers: Optional[int] = None,
+    distance_threshold: float = 0.64,
+) -> np.ndarray:
+    """
+    Pure-NumPy average-linkage hierarchical cosine clustering.
+    Eliminates `scipy.cluster.hierarchy` dependency completely.
+    """
+    n = len(embs)
+    if n <= 1:
+        return np.ones(n, dtype=int)
+
+    # Normalize embeddings so dot product == cosine similarity
+    norms = np.linalg.norm(embs, axis=1, keepdims=True)
+    normed = embs / np.maximum(norms, 1e-8)
+    sim_mat = np.clip(normed @ normed.T, -1.0, 1.0)
+    dist_mat = 1.0 - sim_mat
+
+    clusters: List[List[int]] = [[i] for i in range(n)]
+    target_k = min(num_speakers, n) if (num_speakers is not None and num_speakers > 1) else 1
+
+    while len(clusters) > target_k:
+        best_dist = 999.0
+        best_pair = (-1, -1)
+        m = len(clusters)
+        for i in range(m):
+            ci = clusters[i]
+            for j in range(i + 1, m):
+                cj = clusters[j]
+                avg_d = float(np.mean(dist_mat[np.ix_(ci, cj)]))
+                if avg_d < best_dist:
+                    best_dist = avg_d
+                    best_pair = (i, j)
+
+        if best_pair[0] < 0:
+            break
+        if (num_speakers is None or num_speakers <= 1) and best_dist > distance_threshold:
+            break
+
+        i_keep, j_merge = best_pair
+        clusters[i_keep].extend(clusters.pop(j_merge))
+
+    labels = np.ones(n, dtype=int)
+    for cluster_idx, member_indices in enumerate(clusters, start=1):
+        for idx in member_indices:
+            labels[idx] = cluster_idx
+    return labels
+
+
 class LocalSpeakerDiarizer:
     """Extracts voice embeddings and clusters/assigns Speaker IDs (speaker_1, speaker_2, ...)."""
 
     def __init__(self, similarity_threshold: float = 0.44):
         self.similarity_threshold = similarity_threshold
-        self._extractor = None
+        self._extractor: Optional[ort.InferenceSession] = None
 
-    def _get_extractor(self):
+    def _get_extractor(self) -> Optional[ort.InferenceSession]:
         if self._extractor is not None:
             return self._extractor
-        if not HAS_SHERPA or not is_speaker_model_downloaded():
+        if not is_speaker_model_downloaded():
             return None
         try:
             model_path = app_config.SPEAKER_EMBEDDING_MODEL_PATH
-            config = sherpa_onnx.SpeakerEmbeddingExtractorConfig(
-                model=str(model_path),
-                num_threads=2,
-                debug=False,
-                provider="cpu",
+            sess_opts = ort.SessionOptions()
+            sess_opts.intra_op_num_threads = 2
+            self._extractor = ort.InferenceSession(
+                str(model_path),
+                sess_options=sess_opts,
+                providers=["CPUExecutionProvider"],
             )
-            self._extractor = sherpa_onnx.SpeakerEmbeddingExtractor(config)
             return self._extractor
         except Exception as exc:
-            print(f"[Diarizer] Could not load local Sherpa-ONNX speaker model, using spectral voiceprint fallback: {exc}")
+            print(f"[Diarizer] Could not load local ONNX speaker model, using spectral voiceprint fallback: {exc}")
             return None
 
     def extract_embedding(self, audio_16k: np.ndarray) -> Optional[np.ndarray]:
         """Extract a normalized 1D speaker voice embedding vector from 16kHz mono float32 audio."""
         if len(audio_16k) < int(SAMPLE_RATE * 0.35):
-            # Pad short utterances so embedding extractor has enough frames
             pad_len = int(SAMPLE_RATE * 0.5) - len(audio_16k)
             if pad_len > 0:
                 audio_16k = np.pad(audio_16k, (0, pad_len), mode="wrap" if len(audio_16k) > 100 else "constant")
@@ -66,15 +144,14 @@ class LocalSpeakerDiarizer:
         extractor = self._get_extractor()
         if extractor is not None:
             try:
-                stream = extractor.create_stream()
-                stream.accept_waveform(sample_rate=SAMPLE_RATE, waveform=audio_16k.tolist())
-                stream.input_finished()
-                if extractor.is_ready(stream):
-                    emb = np.array(extractor.compute(stream), dtype=np.float32)
-                    norm = np.linalg.norm(emb)
-                    if norm > 1e-8:
-                        emb = emb / norm
-                    return emb
+                fbank = _extract_kaldi_fbank_80(audio_16k)
+                inp_name = extractor.get_inputs()[0].name
+                raw_out = extractor.run(None, {inp_name: fbank})[0]
+                emb = np.asarray(raw_out, dtype=np.float32).reshape(-1)
+                norm = float(np.linalg.norm(emb))
+                if norm > 1e-8:
+                    emb = emb / norm
+                return emb
             except Exception as exc:
                 print(f"[Diarizer] ONNX embedding computation warning: {exc}")
 
@@ -209,19 +286,13 @@ class LocalSpeakerDiarizer:
         anchor_indices = np.where(anchor_mask)[0]
         anchor_embs = emb_matrix[anchor_indices]
 
-        # Cluster anchor segments using SciPy hierarchical average-linkage cosine clustering
+        # Cluster anchor segments using pure-NumPy hierarchical average-linkage cosine clustering
         try:
-            from scipy.cluster.hierarchy import fcluster, linkage
-            from scipy.spatial.distance import pdist
-
-            dists = np.clip(pdist(anchor_embs, metric="cosine"), 0.0, 2.0)
-            z_mat = linkage(dists, method="average")
-            if num_speakers is not None and num_speakers > 1:
-                n_clusters = min(num_speakers, len(anchor_embs))
-                anchor_labels = fcluster(z_mat, t=n_clusters, criterion="maxclust")
-            else:
-                # Cosine distance threshold ~0.64 (similarity ~0.36) prevents over-splitting the same voice
-                anchor_labels = fcluster(z_mat, t=0.64, criterion="distance")
+            anchor_labels = _agglomerative_average_cosine_numpy(
+                anchor_embs,
+                num_speakers=num_speakers,
+                distance_threshold=0.64,
+            )
         except Exception as exc:
             print(f"[Diarizer] Fallback to online clustering: {exc}")
             assigned = []
