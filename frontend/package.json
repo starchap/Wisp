@@ -68,8 +68,10 @@
         "zip"
       ],
       "icon": "public/wisp-icon.ico",
+      "signAndEditExecutable": false,
       "artifactName": "${productName}-${version}-win.${ext}"
     },
+    "afterPack": "electron/afterPack.cjs",
     "mac": {
       "target": [
         "dmg",

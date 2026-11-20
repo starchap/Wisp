@@ -11,8 +11,6 @@ import urllib.request
 from pathlib import Path
 from typing import Dict, List
 
-from huggingface_hub import hf_hub_download
-
 import config
 from config import (
     DEFAULT_WHISPER_MODEL,
@@ -24,6 +22,21 @@ from config import (
 )
 
 WHISPER_MAP = {m["id"]: m for m in WHISPER_MODELS}
+
+
+def hf_hub_download(repo_id: str, filename: str, local_dir: str) -> str:
+    """Download a public model file directly from Hugging Face via standard-library urllib (zero native DLL dependencies)."""
+    dest = Path(local_dir) / filename
+    if dest.exists() and dest.stat().st_size > 0:
+        return str(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    url = f"https://huggingface.co/{repo_id}/resolve/main/{filename}"
+    tmp_path = dest.with_suffix(dest.suffix + ".tmp")
+    req = urllib.request.Request(url, headers={"User-Agent": "WispAI/1.0"})
+    with urllib.request.urlopen(req, timeout=180) as resp, open(tmp_path, "wb") as out_f:
+        shutil.copyfileobj(resp, out_f, length=1024 * 1024)
+    tmp_path.replace(dest)
+    return str(dest)
 
 
 def get_whisper_model_dir(model_id: str) -> Path:

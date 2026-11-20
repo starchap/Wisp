@@ -83,9 +83,16 @@ jobs:
                   '__pycache__', '*.pyc', 'test', 'tests', 'tkinter', 'idlelib',
                   'turtledemo', 'ensurepip', 'lib2to3', 'pydoc_data', 'distutils',
                   'pip', 'pip-*', 'setuptools', 'setuptools-*', 'wheel', 'wheel-*',
-                  'pkg_resources'
+                  'pkg_resources', 'pydantic_core*', 'watchfiles*', 'httptools*',
+                  'yaml*', 'PyYAML*', 'huggingface_hub*', 'hf_xet*', 'google*'
               )
           )
+          # Strip optional Cython/C .pyd extensions from pydantic v1 and websockets so they run 100% pure-Python
+          for pkg in ('pydantic', 'websockets'):
+              pkg_dir = dst / 'Lib' / 'site-packages' / pkg
+              if pkg_dir.exists():
+                  for pyd in pkg_dir.rglob('*.pyd'):
+                      pyd.unlink(missing_ok=True)
           print('Bundled DigiCert-signed Python runtime into', dst)
           "
 
