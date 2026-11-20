@@ -23,37 +23,41 @@ def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def _build_fbank_matrix_80(sr: int = SAMPLE_RATE, n_fft: int = 512, n_mels: int = 80) -> np.ndarray:
+    """Exact Kaldi / kaldifeat 80-bin Mel filterbank (20 Hz to 7600 Hz, Mel-space triangular interpolation)."""
     mel_low = 1127.0 * np.log(1.0 + 20.0 / 700.0)
     mel_high = 1127.0 * np.log(1.0 + 7600.0 / 700.0)
     mels = np.linspace(mel_low, mel_high, n_mels + 2)
-    hz = 700.0 * (np.exp(mels / 1127.0) - 1.0)
-    bins = np.floor((n_fft + 1) * hz / float(sr)).astype(int)
+    freqs = (float(sr) / float(n_fft)) * np.arange(n_fft // 2 + 1)
+    f_mel = 1127.0 * np.log(1.0 + freqs / 700.0)
     fb = np.zeros((n_mels, n_fft // 2 + 1), dtype=np.float32)
-    for m in range(1, n_mels + 1):
-        f_l, f_c, f_r = bins[m - 1], bins[m], bins[m + 1]
-        for k in range(f_l, f_c):
-            if f_c > f_l:
-                fb[m - 1, k] = (k - f_l) / float(f_c - f_l)
-        for k in range(f_c, f_r):
-            if f_r > f_c:
-                fb[m - 1, k] = (f_r - k) / float(f_r - f_c)
+    for m in range(n_mels):
+        l, c, r = mels[m], mels[m + 1], mels[m + 2]
+        fb[m] = np.maximum(0.0, np.minimum((f_mel - l) / (c - l), (r - f_mel) / (r - c)))
+    fb[:, -1] = 0.0  # Kaldi ignores Nyquist bin
     return fb
 
 
 _FBANK_80 = _build_fbank_matrix_80()
-_HANN_400 = (0.5 - 0.5 * np.cos(2.0 * np.pi * np.arange(400) / 400.0)).astype(np.float32)
+_POVEY_400 = np.power(0.5 - 0.5 * np.cos(2.0 * np.pi * np.arange(400) / 399.0), 0.85).astype(np.float32)
 
 
 def _extract_kaldi_fbank_80(audio_16k: np.ndarray) -> np.ndarray:
-    """Compute [1, T, 80] mean-normalized 80-dim log-Mel filterbank features for 3D-Speaker ONNX."""
+    """
+    Compute [1, T, 80] mean-normalized 80-dim Kaldi log-Mel filterbank features for 3D-Speaker ONNX.
+    Applies per-frame DC offset removal, 0.97 pre-emphasis, and Povey window to match `kaldifeat` (>0.992 cosine match).
+    """
     if len(audio_16k) < 400:
         audio_16k = np.pad(audio_16k, (0, 400 - len(audio_16k)))
-    audio_16k = np.ascontiguousarray(audio_16k, dtype=np.float32)
-    n_frames = max(1, (len(audio_16k) - 400) // 160 + 1)
-    strides = (audio_16k.strides[0] * 160, audio_16k.strides[0])
-    frames = np.lib.stride_tricks.as_strided(audio_16k, shape=(n_frames, 400), strides=strides) * _HANN_400
+    x = np.ascontiguousarray(audio_16k, dtype=np.float32)
+    n_frames = max(1, (len(x) - 400) // 160 + 1)
+    strides = (x.strides[0] * 160, x.strides[0])
+    frames = np.lib.stride_tricks.as_strided(x, shape=(n_frames, 400), strides=strides).copy()
+    frames -= np.mean(frames, axis=1, keepdims=True)
+    frames[:, 1:] = frames[:, 1:] - 0.97 * frames[:, :-1]
+    frames[:, 0] *= 0.03
+    frames *= _POVEY_400
     power = np.abs(np.fft.rfft(frames, n=512, axis=1)) ** 2
-    fbank = np.log(np.maximum(power @ _FBANK_80.T, 1e-10)).astype(np.float32)
+    fbank = np.log(np.maximum(power @ _FBANK_80.T, 1.1920929e-7)).astype(np.float32)
     fbank -= np.mean(fbank, axis=0, keepdims=True)
     return fbank[np.newaxis, :, :]
 

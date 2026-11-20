@@ -416,24 +416,30 @@ def _get_whisper_mel_filters(n_mels: int = 80, sr: int = SAMPLE_RATE, n_fft: int
 
 
 def _whisper_log_mel_spectrogram(audio_16k: np.ndarray, n_mels: int = 80) -> np.ndarray:
-    """Compute [1, n_mels, 3000] 30-second padded Whisper log-Mel spectrogram in pure NumPy."""
-    n_samples = 480000  # 30s at 16kHz
-    if len(audio_16k) < n_samples:
-        padded = np.pad(audio_16k, (0, n_samples - len(audio_16k)))
-    else:
-        padded = audio_16k[:n_samples]
-    padded = np.ascontiguousarray(padded, dtype=np.float32)
-    pad_reflect = np.pad(padded, (200, 200), mode="reflect")
+    """
+    Compute [1, n_mels, 3000] Whisper log-Mel spectrogram matching `sherpa-onnx` (`kaldifeat::WhisperFbank`):
+    1. Compute STFT and log10 Mel power ONLY on the actual audio frames `n_f = min(3000, len(audio_16k) // 160)`.
+    2. Normalize `log_spec` on those `n_f` frames (`(np.maximum(log_spec, max_val - 8.0) + 4.0) / 4.0`).
+    3. Place into a zero-initialized `[1, n_mels, 3000]` buffer so unused frames `n_f .. 3000` remain `0.0`.
+    """
+    clipped = np.ascontiguousarray(audio_16k[:480000], dtype=np.float32)
+    if len(clipped) < 400:
+        clipped = np.pad(clipped, (0, 400 - len(clipped)))
+    n_f = min(3000, max(1, len(clipped) // 160))
+    pad_reflect = np.pad(clipped, (200, 200), mode="reflect")
     strides = (pad_reflect.strides[0] * 160, pad_reflect.strides[0])
-    frames = np.lib.stride_tricks.as_strided(pad_reflect, shape=(3000, 400), strides=strides) * _WHISPER_HANN_400
+    frames = np.lib.stride_tricks.as_strided(pad_reflect, shape=(n_f, 400), strides=strides) * _WHISPER_HANN_400
     stft = np.fft.rfft(frames, n=400, axis=1)
     magnitudes = np.abs(stft) ** 2
     filters = _get_whisper_mel_filters(n_mels)
     mel_spec = filters @ magnitudes.T
     log_spec = np.log10(np.maximum(mel_spec, 1e-10))
-    log_spec = np.maximum(log_spec, log_spec.max() - 8.0)
+    max_val = log_spec.max()
+    log_spec = np.maximum(log_spec, max_val - 8.0)
     log_spec = (log_spec + 4.0) / 4.0
-    return log_spec[np.newaxis, :, :].astype(np.float32)
+    full = np.zeros((1, n_mels, 3000), dtype=np.float32)
+    full[0, :, :n_f] = log_spec
+    return full
 
 
 class WhisperONNXRunner:
@@ -548,22 +554,15 @@ class WhisperONNXRunner:
         )
         offset[0] = init_tokens.shape[1]
 
-        # Dynamic max tokens proportional to audio clip length to prevent silence hallucinations
-        max_tokens = min(220, max(24, int(duration_sec * 12)))
+        max_tokens = min(220, max(28, int(duration_sec * 14)))
         out_ids: List[int] = []
 
-        step_logits = logits[0, -1].copy()
-        # Suppress blank & non-speech on the very first token
-        step_logits[self.blank_id] = -1e9
-        step_logits[self.no_speech] = -1e9
-        step_logits[self.sot] = -1e9
-        step_logits[self.no_timestamps :] = -1e9
-        next_tok = int(np.argmax(step_logits))
-
-        while next_tok != self.eot and len(out_ids) < max_tokens:
+        next_tok = int(np.argmax(logits[0, -1]))
+        for _ in range(max_tokens):
+            if next_tok == self.eot:
+                break
             if next_tok < self.eot:
                 out_ids.append(next_tok)
-            # Stop if degenerate single-token or 2-token repetition loop occurs
             if len(out_ids) >= 6 and len(set(out_ids[-6:])) == 1:
                 out_ids = out_ids[:-5]
                 break
@@ -583,11 +582,7 @@ class WhisperONNXRunner:
                 },
             )
             offset[0] += 1
-            step_logits = logits[0, -1].copy()
-            step_logits[self.sot] = -1e9
-            step_logits[self.no_speech] = -1e9
-            step_logits[self.no_timestamps :] = -1e9
-            next_tok = int(np.argmax(step_logits))
+            next_tok = int(np.argmax(logits[0, -1]))
 
         raw_bytes = b"".join(self.tokens_map.get(t, b"") for t in out_ids)
         return raw_bytes.decode("utf-8", errors="replace").strip()
@@ -639,14 +634,13 @@ class LocalSpeechPipeline:
 
     @staticmethod
     def _normalize_speech_clip(audio_16k: np.ndarray) -> np.ndarray:
-        """Peak-normalize quiet microphone/loopback clips so INT8 Whisper models hear speech clearly."""
+        """Peak-normalize genuinely quiet microphone/loopback clips (<0.20 peak) without distorting normal speech."""
         if len(audio_16k) == 0:
             return audio_16k
-        centered = audio_16k - float(np.mean(audio_16k))
-        peak = float(np.max(np.abs(centered)))
-        if 0.002 < peak < 0.75:
-            return np.clip(centered * (0.82 / peak), -1.0, 1.0).astype(np.float32)
-        return centered.astype(np.float32)
+        peak = float(np.max(np.abs(audio_16k)))
+        if 0.002 < peak < 0.20:
+            return np.clip(audio_16k * (0.65 / peak), -1.0, 1.0).astype(np.float32)
+        return audio_16k.astype(np.float32)
 
     def _run_whisper_clip(
         self,
