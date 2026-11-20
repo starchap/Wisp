@@ -179,8 +179,6 @@ jobs:
         with:
           name: Wisp-${{ matrix.platform_name }}
           path: |
-            frontend/release/*.exe
-            frontend/release/*.appx
             frontend/release/*.dmg
             frontend/release/*.zip
             frontend/release/*.deb
@@ -215,14 +213,12 @@ jobs:
           name: ${{ startsWith(github.ref, 'refs/tags/') && format('WispAI {0}', github.ref_name) || 'WispAI v1.0.0 (Latest Build)' }}
           body: |
             ### WispAI — 100% Offline Local AI Meeting Transcriber & Translator
-            Download the installer for your operating system below:
-            - **Windows:** `WispAI-Setup-1.0.0.exe` (Installer), `WispAI-1.0.0.appx` (Microsoft Store Package), or `WispAI-1.0.0-win.zip` (Portable ZIP)
+            Download the package for your operating system below:
+            - **Windows (Portable ZIP):** `WispAI-1.0.0-win.zip` (Unzip and run `WispAI.exe` directly — ready to run, no installer required)
             - **macOS (Apple Silicon):** `WispAI-1.0.0-arm64.dmg` or `WispAI-1.0.0-arm64-mac.zip`
             - **Linux (Ubuntu / Debian):** `wisp-desktop_1.0.0_amd64.deb` or `WispAI-1.0.0.AppImage`
             - **Linux (Fedora / Red Hat):** `wisp-desktop-1.0.0.x86_64.rpm`
           files: |
-            release-assets/**/*.exe
-            release-assets/**/*.appx
             release-assets/**/*.dmg
             release-assets/**/*.zip
             release-assets/**/*.deb

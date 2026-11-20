@@ -12,7 +12,7 @@
     "dev:vite": "vite --port 5173",
     "dev:electron": "electron .",
     "build": "tsc -b && vite build",
-    "dist:win": "npm run build && electron-builder --win nsis portable zip appx",
+    "dist:win": "npm run build && electron-builder --win zip",
     "dist:mac": "npm run build && electron-builder --mac dmg zip",
     "dist:linux": "npm run build && electron-builder --linux deb rpm AppImage"
   },
@@ -65,35 +65,10 @@
     ],
     "win": {
       "target": [
-        "nsis",
-        "portable",
-        "zip",
-        "appx"
+        "zip"
       ],
-      "icon": "public/wisp-icon.ico"
-    },
-    "appx": {
-      "identityName": "StarChap.WispAI",
-      "publisher": "CN=3C3E462B-C8B7-4B89-9DA4-2BAFE58FF6F2",
-      "publisherDisplayName": "StarChap",
-      "displayName": "WispAI",
-      "applicationId": "WispAI",
-      "languages": [
-        "en-US",
-        "da-DK"
-      ],
-      "artifactName": "${productName}-${version}.${ext}"
-    },
-    "nsis": {
-      "oneClick": false,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
-      "differentialPackage": false,
-      "artifactName": "${productName}-Setup-${version}.${ext}"
-    },
-    "portable": {
-      "artifactName": "${productName}-Portable-${version}.${ext}",
-      "unpackDirName": "WispApp"
+      "icon": "public/wisp-icon.ico",
+      "artifactName": "${productName}-${version}-win.${ext}"
     },
     "mac": {
       "target": [

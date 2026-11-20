@@ -43,7 +43,7 @@ WispAI figures out **who is speaking**, writes down **what they said**, and can 
 
 Go to the [**Releases Page**](https://github.com/starchap/Wisp/releases/latest) and download the file for your computer:
 
-- **Windows:** `WispAI-Setup-1.0.0.exe` or `WispAI-1.0.0.appx` (Microsoft Store)
+- **Windows (Portable ZIP):** `WispAI-1.0.0-win.zip` — Unzip the folder and open `WispAI.exe` (ready to run directly without installation).
 - **macOS (Apple Silicon):** `WispAI-1.0.0-arm64.dmg`
   > **macOS First-Launch Tip:** Because WispAI is a free community app without a paid Apple Developer subscription, macOS Gatekeeper may show *"WispAI is damaged and can't be opened"* after downloading from a browser. After dragging **WispAI** to your **Applications** folder, run this one-line command in **Terminal** once to allow it:
   > ```bash
