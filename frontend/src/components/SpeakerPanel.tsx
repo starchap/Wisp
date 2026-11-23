@@ -58,9 +58,15 @@ export const SpeakerPanel: React.FC<SpeakerPanelProps> = ({
       const numB = parseInt(b.id.replace('speaker_', ''), 10) || 999;
       return numA - numB;
     });
+  const isTranslationSkipped =
+    !session.target_language ||
+    session.target_language === 'none' ||
+    session.translation_model === 'none';
+
   const targetLangObj = languages.find(
-    (l) => l.code === session.target_language
+    (l) => l.code === session.target_language && l.code !== 'none'
   );
+  const spokenLanguageOptions = languages.filter((l) => l.code !== 'none');
 
   const handleStartEdit = (spk: SpeakerProfile) => {
     setEditingId(spk.id);
@@ -78,16 +84,11 @@ export const SpeakerPanel: React.FC<SpeakerPanelProps> = ({
     <aside className="w-80 border-l border-slate-800/80 bg-slate-900/60 flex flex-col shrink-0 select-none">
       {/* Header */}
       <div className="p-4 border-b border-slate-800/80 flex items-center justify-between gap-2">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <Users className="w-4 h-4 text-blue-400 shrink-0" />
-            <h2 className="text-sm font-semibold text-white">
-              {t('speakersAndLanguages')} ({speakersList.length})
-            </h2>
-          </div>
-          <div className="text-[11px] text-indigo-300 font-medium truncate mt-0.5">
-            {session.title}
-          </div>
+        <div className="flex items-center gap-2 min-w-0">
+          <Users className="w-4 h-4 text-blue-400 shrink-0" />
+          <h2 className="text-sm font-semibold text-white truncate">
+            {t('speakersAndLanguages')} ({speakersList.length})
+          </h2>
         </div>
       </div>
 
@@ -214,11 +215,15 @@ export const SpeakerPanel: React.FC<SpeakerPanelProps> = ({
                       <Globe2 className="w-3 h-3 text-slate-400" />
                       {t('spokenLanguage')}
                     </span>
-                    <span className="text-blue-400 font-medium">
-                      &rarr; {targetLangObj?.code.toUpperCase() || session.target_language.toUpperCase()}
-                    </span>
+                    {!isTranslationSkipped && (
+                      <span className="text-blue-400 font-medium">
+                        &rarr;{' '}
+                        {targetLangObj?.code.toUpperCase() ||
+                          session.target_language.toUpperCase()}
+                      </span>
+                    )}
                   </div>
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-1.5 min-w-0">
                     <select
                       value={spk.language}
                       disabled={isReprocessing}
@@ -228,9 +233,9 @@ export const SpeakerPanel: React.FC<SpeakerPanelProps> = ({
                           reprocess_segments: true,
                         })
                       }
-                      className="flex-1 bg-slate-900/90 border border-slate-700 hover:border-slate-600 focus:border-blue-500 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none cursor-pointer"
+                      className="flex-1 min-w-0 bg-slate-900/90 border border-slate-700 hover:border-slate-600 focus:border-blue-500 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none cursor-pointer truncate"
                     >
-                      {languages.map((lang) => (
+                      {spokenLanguageOptions.map((lang) => (
                         <option key={lang.code} value={lang.code}>
                           {lang.name}
                         </option>
@@ -245,7 +250,8 @@ export const SpeakerPanel: React.FC<SpeakerPanelProps> = ({
                           })
                         }
                         disabled={isReprocessing}
-                        className="p-1.5 rounded-lg bg-slate-700/60 hover:bg-slate-700 text-slate-300 hover:text-white disabled:opacity-50 transition"
+                        className="p-1.5 rounded-lg bg-slate-700/60 hover:bg-slate-700 text-slate-300 hover:text-white disabled:opacity-50 transition shrink-0"
+                        title={t('retranscribeBtn')}
                       >
                         <RefreshCw
                           className={`w-3.5 h-3.5 ${
