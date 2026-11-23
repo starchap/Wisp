@@ -522,15 +522,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                 )}
 
-                {/* 4-Step Left-to-Right Pipeline Layout */}
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-3.5 items-stretch">
-                  {/* COLUMN 1: Step 1 — Audio In & Speakers */}
-                  <div className="lg:col-span-3 rounded-2xl bg-slate-950/60 border border-slate-800 p-4 flex flex-col justify-between">
+                {/* 4-Step Pipeline Layout — Spacious 2x2 Grid of Clean Stacked Cards */}
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-stretch">
+                  {/* SECTION 1: Step 1 — Audio In & Speakers */}
+                  <div className="rounded-2xl bg-slate-950/60 border border-slate-800 p-4 flex flex-col justify-between">
                     <div className="space-y-3">
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">
-                        <Users className="w-3.5 h-3.5" />
-                        Step 1: Audio In & Speakers
-                      </span>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">
+                          <Users className="w-3.5 h-3.5" />
+                          Step 1: Audio In & Speakers
+                        </span>
+                        <span className="text-[11px] text-slate-500">
+                          Voice Diarization
+                        </span>
+                      </div>
 
                       <p className="text-xs text-slate-400 leading-relaxed">
                         Captures MP3 recordings or live Teams/Huddle audio,
@@ -539,17 +544,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         <code className="text-slate-200">Speaker 2</code>, etc.).
                       </p>
 
-                      <div className="p-3.5 rounded-xl bg-slate-900 border border-indigo-500/30 space-y-2.5">
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <div className="text-xs font-bold text-white">
+                      <div className="p-3.5 rounded-xl bg-slate-900 border border-indigo-500/30 space-y-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="text-xs font-bold text-white leading-snug">
                               {modelsStatus.speaker_diarization.name}
                             </div>
-                            <div className="text-[11px] text-indigo-300 mt-0.5">
+                            <div className="text-[11px] text-indigo-300 mt-0.5 font-medium">
                               Active Diarization Model
                             </div>
                           </div>
-                          <span className="text-[10px] font-mono text-slate-400 bg-slate-800 px-1.5 py-0.5 rounded shrink-0">
+                          <span className="text-[10px] font-mono text-slate-400 bg-slate-800 px-2 py-0.5 rounded-md shrink-0">
                             ~{modelsStatus.speaker_diarization.size_mb} MB
                           </span>
                         </div>
@@ -559,12 +564,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           ONNX Runtime to cluster distinct voices.
                         </p>
 
-                        <div className="pt-1 flex items-center justify-between gap-2">
+                        <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between gap-2">
                           {modelsStatus.speaker_diarization.downloaded ? (
-                            <div className="flex items-center justify-between w-full gap-2">
-                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-400 text-xs font-semibold border border-emerald-500/30">
-                                <CheckCircle2 className="w-3.5 h-3.5" />
-                                {t('readyOffline')}
+                            <>
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-400 text-[11px] font-semibold border border-emerald-500/30">
+                                <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                                <span>{t('readyOffline')}</span>
                               </span>
                               <button
                                 type="button"
@@ -578,19 +583,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                     onModelsStatusUpdated?.(next);
                                   } catch (_) {}
                                 }}
-                                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-800/80 hover:bg-rose-600/20 text-slate-400 hover:text-rose-400 border border-slate-700/80 hover:border-rose-500/40 text-[11px] font-semibold disabled:opacity-40 transition"
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-rose-600/20 text-slate-400 hover:text-rose-400 border border-slate-700/80 hover:border-rose-500/40 text-[11px] font-semibold disabled:opacity-40 transition"
                               >
-                                <Trash2 className="w-3 h-3" />
+                                <Trash2 className="w-3 h-3 shrink-0" />
                                 <span>{t('deleteModel')}</span>
                               </button>
-                            </div>
+                            </>
                           ) : (
                             <button
                               disabled={isBusy}
                               onClick={() => triggerModelDownload('speaker')}
-                              className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-semibold"
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-semibold transition"
                             >
-                              {t('download')}
+                              <Download className="w-3.5 h-3.5" />
+                              <span>
+                                {t('download')} (~
+                                {modelsStatus.speaker_diarization.size_mb} MB)
+                              </span>
                             </button>
                           )}
                         </div>
@@ -603,20 +612,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </div>
                   </div>
 
-                  {/* COLUMN 2: Step 2 — Speech-to-Text Models */}
-                  <div className="lg:col-span-3 rounded-2xl bg-slate-950/60 border border-slate-800 p-4 flex flex-col justify-between">
+                  {/* SECTION 2: Step 2 — Speech-to-Text Models */}
+                  <div className="rounded-2xl bg-slate-950/60 border border-slate-800 p-4 flex flex-col justify-between">
                     <div className="space-y-3">
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider bg-blue-500/15 text-blue-300 border border-blue-500/30">
-                        <Cpu className="w-3.5 h-3.5" />
-                        Step 2: Speech-to-Text Models
-                      </span>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider bg-blue-500/15 text-blue-300 border border-blue-500/30">
+                          <Cpu className="w-3.5 h-3.5" />
+                          Step 2: Speech-to-Text Models
+                        </span>
+                        <span className="text-[11px] text-slate-500">
+                          Whisper ONNX INT8
+                        </span>
+                      </div>
 
                       <p className="text-xs text-slate-400 leading-relaxed">
                         Transcribes each speaker&apos;s audio in their spoken
-                        language. Click a downloaded model to make it active.
+                        language. Click any downloaded model card to make it active.
                       </p>
 
-                      <div className="space-y-2">
+                      <div className="space-y-2.5">
                         {modelsStatus.whisper_models.map((wm) => {
                           const isSelected = activeWhisperModel === wm.id;
                           return (
@@ -627,29 +641,40 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                   onSelectWhisperModel(wm.id);
                                 }
                               }}
-                              className={`p-3 rounded-xl border transition ${
+                              className={`p-3.5 rounded-xl border transition space-y-2 ${
                                 isSelected
                                   ? 'bg-blue-950/30 border-blue-500/60 shadow-md shadow-blue-500/10'
                                   : 'bg-slate-900/90 border-slate-800 hover:border-slate-700'
                               } ${wm.downloaded ? 'cursor-pointer' : ''}`}
                             >
-                              <div className="flex items-center justify-between gap-2">
-                                <div className="flex items-center gap-2 min-w-0">
-                                  <span className="text-xs font-bold text-white truncate">
-                                    {wm.name}
+                              {/* Row 1: Full Model Title + ACTIVE Badge */}
+                              <div className="flex items-start justify-between gap-2">
+                                <span className="text-xs font-bold text-white leading-snug">
+                                  {wm.name}
+                                </span>
+                                {isSelected && (
+                                  <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-blue-600 text-white shrink-0">
+                                    ACTIVE
                                   </span>
-                                  {isSelected && (
-                                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-600 text-white shrink-0">
-                                      ACTIVE
-                                    </span>
-                                  )}
-                                </div>
+                                )}
+                              </div>
+
+                              {/* Row 2: Description */}
+                              <p className="text-[11px] text-slate-400 leading-relaxed">
+                                {wm.description}
+                              </p>
+
+                              {/* Row 3: Action Footer (Status Pill + Delete / Download Button) */}
+                              <div className="pt-2 border-t border-slate-800/70 flex items-center justify-between gap-2">
+                                <span className="text-[10px] font-mono text-slate-400 bg-slate-800/90 px-2 py-0.5 rounded-md">
+                                  ~{wm.size_mb} MB
+                                </span>
 
                                 {wm.downloaded ? (
-                                  <div className="flex items-center gap-1.5 shrink-0">
-                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-400 text-[11px] font-semibold border border-emerald-500/30">
-                                      <CheckCircle2 className="w-3 h-3" />
-                                      {t('downloaded')}
+                                  <div className="flex items-center gap-2">
+                                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-400 text-[11px] font-semibold border border-emerald-500/30">
+                                      <CheckCircle2 className="w-3 h-3 shrink-0" />
+                                      <span>{t('downloaded')}</span>
                                     </span>
                                     <button
                                       type="button"
@@ -678,9 +703,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                           }
                                         } catch (_) {}
                                       }}
-                                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-800/80 hover:bg-rose-600/20 text-slate-400 hover:text-rose-400 border border-slate-700/80 hover:border-rose-500/40 text-[11px] font-semibold disabled:opacity-40 transition"
+                                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-rose-600/20 text-slate-400 hover:text-rose-400 border border-slate-700/80 hover:border-rose-500/40 text-[11px] font-semibold disabled:opacity-40 transition"
                                     >
-                                      <Trash2 className="w-3 h-3" />
+                                      <Trash2 className="w-3 h-3 shrink-0" />
                                       <span>{t('deleteModel')}</span>
                                     </button>
                                   </div>
@@ -691,15 +716,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                       e.stopPropagation();
                                       triggerModelDownload('whisper', wm.id);
                                     }}
-                                    className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-blue-600 disabled:opacity-50 text-white text-[11px] font-semibold border border-slate-700 shrink-0 transition"
+                                    className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-[11px] font-semibold shrink-0 transition"
                                   >
-                                    {t('download')} (~{wm.size_mb} MB)
+                                    <Download className="w-3 h-3" />
+                                    <span>
+                                      {t('download')} (~{wm.size_mb} MB)
+                                    </span>
                                   </button>
                                 )}
                               </div>
-                              <p className="text-[11px] text-slate-400 mt-1 leading-snug">
-                                {wm.description}
-                              </p>
                             </div>
                           );
                         })}
@@ -712,13 +737,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </div>
                   </div>
 
-                  {/* COLUMN 3: Step 3 — Context Word Clarification Models (3rd Model) */}
-                  <div className="lg:col-span-3 rounded-2xl bg-slate-950/60 border border-slate-800 p-4 flex flex-col justify-between">
+                  {/* SECTION 3: Step 3 — Context Word Clarification Models (3rd Model) */}
+                  <div className="rounded-2xl bg-slate-950/60 border border-slate-800 p-4 flex flex-col justify-between">
                     <div className="space-y-3">
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider bg-amber-500/15 text-amber-300 border border-amber-500/30">
-                        <Sparkles className="w-3.5 h-3.5" />
-                        {t('stepClarifyBadge')}
-                      </span>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                          <Sparkles className="w-3.5 h-3.5" />
+                          {t('stepClarifyBadge')}
+                        </span>
+                        <span className="text-[11px] text-slate-500">
+                          Context Validation
+                        </span>
+                      </div>
 
                       <p className="text-xs text-slate-400 leading-relaxed">
                         {t('stepClarifyDesc')}
@@ -744,29 +774,42 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                   onSelectClarificationModel(cm.id);
                                 }
                               }}
-                              className={`p-3 rounded-xl border transition ${
+                              className={`p-3.5 rounded-xl border transition space-y-2 ${
                                 isSelected
                                   ? 'bg-amber-950/25 border-amber-500/60 shadow-md shadow-amber-500/10'
                                   : 'bg-slate-900/90 border-slate-800 hover:border-slate-700'
                               } ${cm.downloaded ? 'cursor-pointer' : ''}`}
                             >
+                              {/* Row 1: Full Model Title + ACTIVE Badge */}
                               <div className="flex items-start justify-between gap-2">
-                                <div className="flex items-center gap-2 flex-wrap">
-                                  <span className="text-xs font-bold text-white">
-                                    {cm.name}
+                                <span className="text-xs font-bold text-white leading-snug">
+                                  {cm.name}
+                                </span>
+                                {isSelected && (
+                                  <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-600 text-white shrink-0">
+                                    ACTIVE
                                   </span>
-                                  {isSelected && (
-                                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-600 text-white shrink-0">
-                                      ACTIVE
-                                    </span>
-                                  )}
-                                </div>
+                                )}
+                              </div>
+
+                              {/* Row 2: Description */}
+                              <p className="text-[11px] text-slate-400 leading-relaxed">
+                                {cm.description}
+                              </p>
+
+                              {/* Row 3: Action Footer */}
+                              <div className="pt-2 border-t border-slate-800/70 flex items-center justify-between gap-2">
+                                <span className="text-[10px] font-mono text-slate-400 bg-slate-800/90 px-2 py-0.5 rounded-md">
+                                  {Number(cm.size_mb) > 0
+                                    ? `~${cm.size_mb} MB`
+                                    : '0 MB extra'}
+                                </span>
 
                                 {cm.downloaded ? (
-                                  <div className="flex items-center gap-1.5 shrink-0">
-                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-400 text-[11px] font-semibold border border-emerald-500/30">
-                                      <CheckCircle2 className="w-3 h-3" />
-                                      {t('readyOffline')}
+                                  <div className="flex items-center gap-2">
+                                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-400 text-[11px] font-semibold border border-emerald-500/30">
+                                      <CheckCircle2 className="w-3 h-3 shrink-0" />
+                                      <span>{t('readyOffline')}</span>
                                     </span>
                                     {cm.id !== 'whisper-context' &&
                                       cm.id !== 'none' && (
@@ -793,9 +836,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                               }
                                             } catch (_) {}
                                           }}
-                                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-800/80 hover:bg-rose-600/20 text-slate-400 hover:text-rose-400 border border-slate-700/80 hover:border-rose-500/40 text-[11px] font-semibold disabled:opacity-40 transition"
+                                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-rose-600/20 text-slate-400 hover:text-rose-400 border border-slate-700/80 hover:border-rose-500/40 text-[11px] font-semibold disabled:opacity-40 transition"
                                         >
-                                          <Trash2 className="w-3 h-3" />
+                                          <Trash2 className="w-3 h-3 shrink-0" />
                                           <span>{t('deleteModel')}</span>
                                         </button>
                                       )}
@@ -812,15 +855,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                         cm.id
                                       );
                                     }}
-                                    className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-[11px] font-semibold shrink-0 transition"
+                                    className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-[11px] font-semibold shrink-0 transition"
                                   >
-                                    {t('download')} (~{cm.size_mb} MB)
+                                    <Download className="w-3 h-3" />
+                                    <span>
+                                      {t('download')} (~{cm.size_mb} MB)
+                                    </span>
                                   </button>
                                 )}
                               </div>
-                              <p className="text-[11px] text-slate-400 mt-1.5 leading-relaxed">
-                                {cm.description}
-                              </p>
                             </div>
                           );
                         })}
@@ -833,13 +876,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </div>
                   </div>
 
-                  {/* COLUMN 4: Step 4 — Local AI Translation Models */}
-                  <div className="lg:col-span-3 rounded-2xl bg-slate-950/60 border border-slate-800 p-4 flex flex-col justify-between">
+                  {/* SECTION 4: Step 4 — Local AI Translation Models */}
+                  <div className="rounded-2xl bg-slate-950/60 border border-slate-800 p-4 flex flex-col justify-between">
                     <div className="space-y-3">
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                        <Languages className="w-3.5 h-3.5" />
-                        {t('step4TranslateBadge')}
-                      </span>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                          <Languages className="w-3.5 h-3.5" />
+                          {t('step4TranslateBadge')}
+                        </span>
+                        <span className="text-[11px] text-slate-500">
+                          Neural Translation
+                        </span>
+                      </div>
 
                       <p className="text-xs text-slate-400 leading-relaxed">
                         Translates each speaker&apos;s validated text into
@@ -860,68 +908,83 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                   onSelectTranslationModel(tm.id);
                                 }
                               }}
-                              className={`p-3.5 rounded-xl border transition ${
+                              className={`p-3.5 rounded-xl border transition space-y-2 ${
                                 isSelected
                                   ? 'bg-emerald-950/25 border-emerald-500/60 shadow-md shadow-emerald-500/10'
                                   : 'bg-slate-900/90 border-slate-800 hover:border-slate-700'
                               } ${tm.downloaded ? 'cursor-pointer' : ''}`}
                             >
+                              {/* Row 1: Full Model Title + ACTIVE Badge */}
                               <div className="flex items-start justify-between gap-2">
-                                <div className="flex items-center gap-2 flex-wrap">
-                                  <span className="text-xs font-bold text-white">
-                                    {tm.name}
+                                <span className="text-xs font-bold text-white leading-snug">
+                                  {tm.name}
+                                </span>
+                                {isSelected && (
+                                  <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-600 text-white shrink-0">
+                                    ACTIVE
                                   </span>
-                                  {isSelected && (
-                                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-600 text-white shrink-0">
-                                      ACTIVE
-                                    </span>
-                                  )}
-                                </div>
+                                )}
+                              </div>
+
+                              {/* Row 2: Description */}
+                              <p className="text-[11px] text-slate-400 leading-relaxed">
+                                {tm.description}
+                              </p>
+
+                              {/* Row 3: Action Footer */}
+                              <div className="pt-2 border-t border-slate-800/70 flex items-center justify-between gap-2">
+                                <span className="text-[10px] font-mono text-slate-400 bg-slate-800/90 px-2 py-0.5 rounded-md">
+                                  {Number(tm.size_mb) > 0
+                                    ? `~${tm.size_mb} MB`
+                                    : '0 MB extra'}
+                                </span>
 
                                 {tm.downloaded ? (
-                                  <div className="flex items-center gap-1.5 shrink-0">
-                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-400 text-[11px] font-semibold border border-emerald-500/30">
-                                      <CheckCircle2 className="w-3 h-3" />
-                                      {t('readyOffline')}
+                                  <div className="flex items-center gap-2">
+                                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-400 text-[11px] font-semibold border border-emerald-500/30">
+                                      <CheckCircle2 className="w-3 h-3 shrink-0" />
+                                      <span>{t('readyOffline')}</span>
                                     </span>
                                     {tm.id !== 'whisper-native' &&
                                       tm.id !== 'none' && (
-                                      <button
-                                        type="button"
-                                        disabled={isBusy}
-                                        title={t('deleteModelTooltip')}
-                                        onClick={async (e) => {
-                                          e.stopPropagation();
-                                          try {
-                                            const next = await deleteLocalModel(
-                                              'translation',
-                                              tm.id
-                                            );
-                                            onModelsStatusUpdated?.(next);
-                                            if (
-                                              isSelected &&
-                                              onSelectTranslationModel
-                                            ) {
-                                              const fallback = (
-                                                next.translation_models || []
-                                              ).find(
-                                                (m) =>
-                                                  m.downloaded && m.id !== tm.id
-                                              );
-                                              if (fallback) {
-                                                onSelectTranslationModel(
-                                                  fallback.id
+                                        <button
+                                          type="button"
+                                          disabled={isBusy}
+                                          title={t('deleteModelTooltip')}
+                                          onClick={async (e) => {
+                                            e.stopPropagation();
+                                            try {
+                                              const next =
+                                                await deleteLocalModel(
+                                                  'translation',
+                                                  tm.id
                                                 );
+                                              onModelsStatusUpdated?.(next);
+                                              if (
+                                                isSelected &&
+                                                onSelectTranslationModel
+                                              ) {
+                                                const fallback = (
+                                                  next.translation_models || []
+                                                ).find(
+                                                  (m) =>
+                                                    m.downloaded &&
+                                                    m.id !== tm.id
+                                                );
+                                                if (fallback) {
+                                                  onSelectTranslationModel(
+                                                    fallback.id
+                                                  );
+                                                }
                                               }
-                                            }
-                                          } catch (_) {}
-                                        }}
-                                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-800/80 hover:bg-rose-600/20 text-slate-400 hover:text-rose-400 border border-slate-700/80 hover:border-rose-500/40 text-[11px] font-semibold disabled:opacity-40 transition"
-                                      >
-                                        <Trash2 className="w-3 h-3" />
-                                        <span>{t('deleteModel')}</span>
-                                      </button>
-                                    )}
+                                            } catch (_) {}
+                                          }}
+                                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-rose-600/20 text-slate-400 hover:text-rose-400 border border-slate-700/80 hover:border-rose-500/40 text-[11px] font-semibold disabled:opacity-40 transition"
+                                        >
+                                          <Trash2 className="w-3 h-3 shrink-0" />
+                                          <span>{t('deleteModel')}</span>
+                                        </button>
+                                      )}
                                   </div>
                                 ) : (
                                   <button
@@ -934,15 +997,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                           : 'nllb'
                                       );
                                     }}
-                                    className="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-[11px] font-semibold shrink-0 transition"
+                                    className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-[11px] font-semibold shrink-0 transition"
                                   >
-                                    {t('download')} (~{tm.size_mb} MB)
+                                    <Download className="w-3 h-3" />
+                                    <span>
+                                      {t('download')} (~{tm.size_mb} MB)
+                                    </span>
                                   </button>
                                 )}
                               </div>
-                              <p className="text-[11px] text-slate-400 mt-1.5 leading-relaxed">
-                                {tm.description}
-                              </p>
                             </div>
                           );
                         })}
