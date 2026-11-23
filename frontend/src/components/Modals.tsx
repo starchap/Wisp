@@ -68,10 +68,12 @@ interface SettingsModalProps {
   onChangeLoopback: (id: string) => void;
   onChangeMic: (id: string) => void;
   activeWhisperModel?: string;
+  activeClarificationModel?: string;
   activeTranslationModel?: string;
   progressText: string | null;
   isBusy: boolean;
   onSelectWhisperModel?: (modelId: string) => void;
+  onSelectClarificationModel?: (modelId: string) => void;
   onSelectTranslationModel?: (modelId: string) => void;
   onModelsStatusUpdated?: (status: ModelsStatus) => void;
   onOpenOnboardingWizard?: () => void;
@@ -121,6 +123,44 @@ const FALLBACK_MODELS_STATUS: ModelsStatus = {
       downloaded: false,
     },
   ],
+  clarification_models: [
+    {
+      id: 'whisper-context',
+      name: 'Whisper Contextual Acoustic Validator (0 MB extra) — Recommended',
+      description:
+        'Validates and corrects misheard words using rolling conversation context (<|startofprev|>), topic keywords, and meeting spoken languages without restructuring sentences.',
+      size_mb: '0',
+      type: 'acoustic-context',
+      downloaded: true,
+    },
+    {
+      id: 'qwen2.5-0.5b',
+      name: 'Qwen 2.5 0.5B Context Clarifier (ONNX Q4, ~755 MB)',
+      description:
+        'Local instruction-tuned causal LLM that validates phonetically misheard words against conversation context with strict sentence-structure preservation.',
+      size_mb: '755',
+      type: 'qwen-onnx',
+      downloaded: false,
+    },
+    {
+      id: 'qwen2.5-1.5b',
+      name: 'Qwen 2.5 1.5B Deep Context Clarifier (ONNX Q4, ~1.7 GB)',
+      description:
+        'Larger 1.5B multilingual context validator for deeper domain & Danish/English compound word correction without altering sentence structure.',
+      size_mb: '1705',
+      type: 'qwen-onnx',
+      downloaded: false,
+    },
+    {
+      id: 'none',
+      name: 'Skip Clarification (Raw Speech-to-Text Output — 0 MB)',
+      description:
+        'Bypasses contextual word clarification and uses the raw first-pass Speech-to-Text transcription directly.',
+      size_mb: '0',
+      type: 'none',
+      downloaded: true,
+    },
+  ],
   translation_models: [
     {
       id: 'opus-mt-da-en',
@@ -147,6 +187,15 @@ const FALLBACK_MODELS_STATUS: ModelsStatus = {
         "Uses Whisper's built-in acoustic translation head to translate speech directly into English.",
       size_mb: '0',
       type: 'whisper',
+      downloaded: true,
+    },
+    {
+      id: 'none',
+      name: 'Skip Translation — Transcription Only (0 MB)',
+      description:
+        "Disables translation completely and keeps the transcript in each speaker's original spoken language.",
+      size_mb: '0',
+      type: 'none',
       downloaded: true,
     },
   ],
@@ -179,10 +228,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onChangeLoopback,
   onChangeMic,
   activeWhisperModel,
+  activeClarificationModel,
   activeTranslationModel,
   progressText,
   isBusy,
   onSelectWhisperModel,
+  onSelectClarificationModel,
   onSelectTranslationModel,
   onModelsStatusUpdated,
   onOpenOnboardingWizard,
@@ -471,8 +522,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                 )}
 
-                {/* 3-Column Left-to-Right Pipeline Layout */}
-                <div className="grid grid-cols-1 lg:grid-cols-11 gap-4 items-stretch">
+                {/* 4-Step Left-to-Right Pipeline Layout */}
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-3.5 items-stretch">
                   {/* COLUMN 1: Step 1 — Audio In & Speakers */}
                   <div className="lg:col-span-3 rounded-2xl bg-slate-950/60 border border-slate-800 p-4 flex flex-col justify-between">
                     <div className="space-y-3">
@@ -505,7 +556,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                         <p className="text-[11px] text-slate-400 leading-relaxed">
                           Extracts acoustic voice embeddings locally via
-                          Sherpa-ONNX to cluster distinct voices.
+                          ONNX Runtime to cluster distinct voices.
                         </p>
 
                         <div className="pt-1 flex items-center justify-between gap-2">
@@ -553,7 +604,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
 
                   {/* COLUMN 2: Step 2 — Speech-to-Text Models */}
-                  <div className="lg:col-span-4 rounded-2xl bg-slate-950/60 border border-slate-800 p-4 flex flex-col justify-between">
+                  <div className="lg:col-span-3 rounded-2xl bg-slate-950/60 border border-slate-800 p-4 flex flex-col justify-between">
                     <div className="space-y-3">
                       <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider bg-blue-500/15 text-blue-300 border border-blue-500/30">
                         <Cpu className="w-3.5 h-3.5" />
@@ -656,22 +707,143 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </div>
 
                     <div className="mt-4 pt-3 border-t border-slate-800/80 text-[11px] text-slate-500 flex items-center justify-between">
-                      <span>Output: Spoken Language Text</span>
+                      <span>Output: Raw Spoken Text</span>
                       <ArrowRight className="w-4 h-4 text-blue-400" />
                     </div>
                   </div>
 
-                  {/* COLUMN 3: Step 3 — Local AI Translation Models */}
-                  <div className="lg:col-span-4 rounded-2xl bg-slate-950/60 border border-slate-800 p-4 flex flex-col justify-between">
+                  {/* COLUMN 3: Step 3 — Context Word Clarification Models (3rd Model) */}
+                  <div className="lg:col-span-3 rounded-2xl bg-slate-950/60 border border-slate-800 p-4 flex flex-col justify-between">
                     <div className="space-y-3">
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                        <Languages className="w-3.5 h-3.5" />
-                        Step 3: Local AI Translation Models
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                        <Sparkles className="w-3.5 h-3.5" />
+                        {t('stepClarifyBadge')}
                       </span>
 
                       <p className="text-xs text-slate-400 leading-relaxed">
-                        Translates each speaker&apos;s transcribed text into
-                        your single chosen Output Language.
+                        {t('stepClarifyDesc')}
+                      </p>
+
+                      <div className="space-y-2.5">
+                        {(
+                          modelsStatus.clarification_models ||
+                          FALLBACK_MODELS_STATUS.clarification_models ||
+                          []
+                        ).map((cm) => {
+                          const isSelected =
+                            (activeClarificationModel || 'whisper-context') ===
+                            cm.id;
+                          return (
+                            <div
+                              key={cm.id}
+                              onClick={() => {
+                                if (
+                                  cm.downloaded &&
+                                  onSelectClarificationModel
+                                ) {
+                                  onSelectClarificationModel(cm.id);
+                                }
+                              }}
+                              className={`p-3 rounded-xl border transition ${
+                                isSelected
+                                  ? 'bg-amber-950/25 border-amber-500/60 shadow-md shadow-amber-500/10'
+                                  : 'bg-slate-900/90 border-slate-800 hover:border-slate-700'
+                              } ${cm.downloaded ? 'cursor-pointer' : ''}`}
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="text-xs font-bold text-white">
+                                    {cm.name}
+                                  </span>
+                                  {isSelected && (
+                                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-600 text-white shrink-0">
+                                      ACTIVE
+                                    </span>
+                                  )}
+                                </div>
+
+                                {cm.downloaded ? (
+                                  <div className="flex items-center gap-1.5 shrink-0">
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-400 text-[11px] font-semibold border border-emerald-500/30">
+                                      <CheckCircle2 className="w-3 h-3" />
+                                      {t('readyOffline')}
+                                    </span>
+                                    {cm.id !== 'whisper-context' &&
+                                      cm.id !== 'none' && (
+                                        <button
+                                          type="button"
+                                          disabled={isBusy}
+                                          title={t('deleteModelTooltip')}
+                                          onClick={async (e) => {
+                                            e.stopPropagation();
+                                            try {
+                                              const next =
+                                                await deleteLocalModel(
+                                                  'clarification',
+                                                  cm.id
+                                                );
+                                              onModelsStatusUpdated?.(next);
+                                              if (
+                                                isSelected &&
+                                                onSelectClarificationModel
+                                              ) {
+                                                onSelectClarificationModel(
+                                                  'whisper-context'
+                                                );
+                                              }
+                                            } catch (_) {}
+                                          }}
+                                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-800/80 hover:bg-rose-600/20 text-slate-400 hover:text-rose-400 border border-slate-700/80 hover:border-rose-500/40 text-[11px] font-semibold disabled:opacity-40 transition"
+                                        >
+                                          <Trash2 className="w-3 h-3" />
+                                          <span>{t('deleteModel')}</span>
+                                        </button>
+                                      )}
+                                  </div>
+                                ) : (
+                                  <button
+                                    disabled={isBusy}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      triggerModelDownload(
+                                        'clarification',
+                                        undefined,
+                                        undefined,
+                                        cm.id
+                                      );
+                                    }}
+                                    className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-[11px] font-semibold shrink-0 transition"
+                                  >
+                                    {t('download')} (~{cm.size_mb} MB)
+                                  </button>
+                                )}
+                              </div>
+                              <p className="text-[11px] text-slate-400 mt-1.5 leading-relaxed">
+                                {cm.description}
+                              </p>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="mt-4 pt-3 border-t border-slate-800/80 text-[11px] text-slate-500 flex items-center justify-between">
+                      <span>{t('stepClarifyFooter')}</span>
+                      <ArrowRight className="w-4 h-4 text-amber-400" />
+                    </div>
+                  </div>
+
+                  {/* COLUMN 4: Step 4 — Local AI Translation Models */}
+                  <div className="lg:col-span-3 rounded-2xl bg-slate-950/60 border border-slate-800 p-4 flex flex-col justify-between">
+                    <div className="space-y-3">
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                        <Languages className="w-3.5 h-3.5" />
+                        {t('step4TranslateBadge')}
+                      </span>
+
+                      <p className="text-xs text-slate-400 leading-relaxed">
+                        Translates each speaker&apos;s validated text into
+                        your single chosen Output Language (or skip translation).
                       </p>
 
                       <div className="space-y-2.5">
@@ -712,7 +884,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                       <CheckCircle2 className="w-3 h-3" />
                                       {t('readyOffline')}
                                     </span>
-                                    {tm.id !== 'whisper-native' && (
+                                    {tm.id !== 'whisper-native' &&
+                                      tm.id !== 'none' && (
                                       <button
                                         type="button"
                                         disabled={isBusy}
@@ -835,6 +1008,37 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         .map((w) => (
                           <option key={w.id} value={w.id}>
                             {w.name}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+
+                  <div className="p-4 flex items-center justify-between gap-4">
+                    <div>
+                      <div className="text-xs font-bold text-white">
+                        {t('defaultClarifierTitle')}
+                      </div>
+                      <div className="text-[11px] text-slate-400 mt-0.5">
+                        {t('defaultClarifierDesc')}
+                      </div>
+                    </div>
+                    <select
+                      value={activeClarificationModel || 'whisper-context'}
+                      onChange={(e) =>
+                        onSelectClarificationModel &&
+                        onSelectClarificationModel(e.target.value)
+                      }
+                      className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs font-semibold text-white focus:outline-none focus:border-amber-500"
+                    >
+                      {(
+                        modelsStatus.clarification_models ||
+                        FALLBACK_MODELS_STATUS.clarification_models ||
+                        []
+                      )
+                        .filter((cm) => cm.downloaded)
+                        .map((cm) => (
+                          <option key={cm.id} value={cm.id}>
+                            {cm.name}
                           </option>
                         ))}
                     </select>
@@ -1398,8 +1602,10 @@ interface SessionDialogModalProps {
   modelsStatus?: ModelsStatus | null;
   languages?: SupportedLanguage[];
   initialWhisperModel?: string;
+  initialClarificationModel?: string;
   initialTranslationModel?: string;
   initialTargetLanguage?: string;
+  initialSpokenLanguages?: string[];
   hasExistingAudio?: boolean;
   onSave: (params: {
     title: string;
@@ -1407,8 +1613,10 @@ interface SessionDialogModalProps {
     file: File | null;
     expectedSpeakers?: number;
     whisperModel: string;
+    clarificationModel: string;
     translationModel: string;
     targetLanguage: string;
+    spokenLanguages: string[];
     retranscribe?: boolean;
   }) => void;
   onClose: () => void;
@@ -1423,8 +1631,10 @@ export const SessionDialogModal: React.FC<SessionDialogModalProps> = ({
   modelsStatus,
   languages = [],
   initialWhisperModel = 'small',
+  initialClarificationModel = 'whisper-context',
   initialTranslationModel = 'opus-mt-da-en',
   initialTargetLanguage = 'en',
+  initialSpokenLanguages = [],
   hasExistingAudio = false,
   onSave,
   onClose,
@@ -1437,11 +1647,17 @@ export const SessionDialogModal: React.FC<SessionDialogModalProps> = ({
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [expectedSpeakers, setExpectedSpeakers] = useState<string>('0');
   const [whisperModel, setWhisperModel] = useState<string>(initialWhisperModel);
+  const [clarificationModel, setClarificationModel] = useState<string>(
+    initialClarificationModel
+  );
   const [translationModel, setTranslationModel] = useState<string>(
     initialTranslationModel
   );
   const [targetLanguage, setTargetLanguage] = useState<string>(
     initialTargetLanguage
+  );
+  const [spokenLanguages, setSpokenLanguages] = useState<string[]>(
+    initialSpokenLanguages
   );
   const [retranscribe, setRetranscribe] = useState<boolean>(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -1453,8 +1669,10 @@ export const SessionDialogModal: React.FC<SessionDialogModalProps> = ({
       setSelectedFile(null);
       setExpectedSpeakers('0');
       setWhisperModel(initialWhisperModel || 'small');
+      setClarificationModel(initialClarificationModel || 'whisper-context');
       setTranslationModel(initialTranslationModel || 'opus-mt-da-en');
       setTargetLanguage(initialTargetLanguage || 'en');
+      setSpokenLanguages(initialSpokenLanguages || []);
       setRetranscribe(false);
     }
   }, [
@@ -1462,8 +1680,10 @@ export const SessionDialogModal: React.FC<SessionDialogModalProps> = ({
     initialTitle,
     initialSessionType,
     initialWhisperModel,
+    initialClarificationModel,
     initialTranslationModel,
     initialTargetLanguage,
+    initialSpokenLanguages,
   ]);
 
   if (!isOpen) return null;
@@ -1475,9 +1695,20 @@ export const SessionDialogModal: React.FC<SessionDialogModalProps> = ({
     downloadedWhispers.length > 0
       ? downloadedWhispers
       : modelsStatus?.whisper_models || [
-          { id: 'tiny', name: 'Whisper Tiny', size_mb: 110, description: '', downloaded: true },
-          { id: 'small', name: 'Whisper Small', size_mb: 610, description: '', downloaded: true },
+          { id: 'tiny', name: 'Whisper Tiny', size_mb: '110', description: '', downloaded: true },
+          { id: 'small', name: 'Whisper Small', size_mb: '610', description: '', downloaded: true },
         ];
+
+  const downloadedClarifiers =
+    (
+      modelsStatus?.clarification_models ||
+      FALLBACK_MODELS_STATUS.clarification_models ||
+      []
+    ).filter((cm) => cm.downloaded);
+  const clarifierOptions =
+    downloadedClarifiers.length > 0
+      ? downloadedClarifiers
+      : FALLBACK_MODELS_STATUS.clarification_models || [];
 
   const downloadedTranslators =
     (modelsStatus?.translation_models || []).filter((tm) => tm.downloaded);
@@ -1485,10 +1716,26 @@ export const SessionDialogModal: React.FC<SessionDialogModalProps> = ({
     downloadedTranslators.length > 0
       ? downloadedTranslators
       : modelsStatus?.translation_models || [
-          { id: 'opus-mt-da-en', name: 'OPUS-MT (DA → EN)', size_mb: 195, description: '', downloaded: true },
+          { id: 'opus-mt-da-en', name: 'OPUS-MT (DA → EN)', size_mb: '85', type: 'opus', description: '', downloaded: true },
+          { id: 'none', name: 'Skip Translation — Transcription Only', size_mb: '0', type: 'none', description: '', downloaded: true },
         ];
 
   const outputLanguages = languages.filter((l) => l.code !== 'auto');
+  const selectableSpokenLanguages = languages.filter(
+    (l) => l.code !== 'auto' && l.code !== 'none'
+  );
+
+  const toggleSpokenLanguage = (langCode: string) => {
+    setSpokenLanguages((prev) => {
+      const next = prev.includes(langCode)
+        ? prev.filter((c) => c !== langCode)
+        : [...prev, langCode];
+      if (isEdit && hasExistingAudio) {
+        setRetranscribe(true);
+      }
+      return next;
+    });
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1500,8 +1747,10 @@ export const SessionDialogModal: React.FC<SessionDialogModalProps> = ({
       file: sessionType === 'file' ? selectedFile : null,
       expectedSpeakers: spkCount > 0 ? spkCount : undefined,
       whisperModel,
+      clarificationModel,
       translationModel,
-      targetLanguage,
+      targetLanguage: translationModel === 'none' ? 'none' : targetLanguage,
+      spokenLanguages,
       retranscribe: isEdit && hasExistingAudio && !selectedFile ? retranscribe : false,
     });
     onClose();
@@ -1721,7 +1970,58 @@ export const SessionDialogModal: React.FC<SessionDialogModalProps> = ({
             </div>
           )}
 
-          {/* 4. AI Models & Output Language Selection for this Session */}
+          {/* 4. Meeting / Interview Spoken Languages (e.g. Danish + English) */}
+          {selectableSpokenLanguages.length > 0 && (
+            <div className="rounded-xl bg-slate-950/60 border border-slate-800 p-3.5 space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-[11px] font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+                  <Languages className="w-3.5 h-3.5 text-amber-400" />
+                  <span>{t('meetingSpokenLanguagesLabel')}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSpokenLanguages([]);
+                    if (isEdit && hasExistingAudio) setRetranscribe(true);
+                  }}
+                  className={`px-2 py-0.5 rounded-md text-[10px] font-semibold border transition ${
+                    spokenLanguages.length === 0
+                      ? 'bg-blue-600 border-blue-500 text-white'
+                      : 'bg-slate-900 border-slate-700 text-slate-400 hover:text-white'
+                  }`}
+                >
+                  {t('autoAllLanguages')}
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-400 leading-snug">
+                {t('meetingSpokenLanguagesDesc')}
+              </p>
+              <div className="flex flex-wrap gap-1.5 pt-0.5">
+                {selectableSpokenLanguages.slice(0, 10).map((lang) => {
+                  const isActive = spokenLanguages.includes(lang.code);
+                  return (
+                    <button
+                      key={lang.code}
+                      type="button"
+                      onClick={() => toggleSpokenLanguage(lang.code)}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition flex items-center gap-1 ${
+                        isActive
+                          ? 'bg-amber-500/20 border-amber-500 text-amber-200 shadow-sm'
+                          : 'bg-slate-900 border-slate-700/80 text-slate-400 hover:border-slate-600 hover:text-slate-200'
+                      }`}
+                    >
+                      {isActive && <Check className="w-3 h-3 text-amber-400" />}
+                      <span>
+                        {lang.name.split(' ')[0]} ({lang.code.toUpperCase()})
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* 5. AI Models & Output Language Selection for this Session */}
           <div className="rounded-xl bg-slate-950/60 border border-slate-800 p-3.5 space-y-3">
             <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
               <Cpu className="w-3.5 h-3.5 text-blue-400" />
@@ -1731,7 +2031,7 @@ export const SessionDialogModal: React.FC<SessionDialogModalProps> = ({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
               <div className="space-y-1">
                 <label className="text-[11px] font-medium text-slate-400">
-                  {t('speechToTextModel')}
+                  1. {t('speechToTextModel')}
                 </label>
                 <select
                   value={whisperModel}
@@ -1753,30 +2053,59 @@ export const SessionDialogModal: React.FC<SessionDialogModalProps> = ({
               </div>
 
               <div className="space-y-1">
-                <label className="text-[11px] font-medium text-slate-400">
-                  {t('localTranslationModel')}
+                <label className="text-[11px] font-medium text-amber-300/90 flex items-center gap-1">
+                  <Sparkles className="w-3 h-3 text-amber-400" />
+                  <span>2. {t('contextClarifierModel')}</span>
                 </label>
                 <select
-                  value={translationModel}
+                  value={clarificationModel}
                   onChange={(e) => {
                     const val = e.target.value;
-                    setTranslationModel(val);
+                    setClarificationModel(val);
                     if (isEdit && hasExistingAudio) {
                       setRetranscribe(true);
                     }
                   }}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-semibold focus:outline-none focus:border-emerald-500"
+                  className="w-full bg-slate-900 border border-amber-500/40 rounded-lg px-2.5 py-1.5 text-xs text-white font-semibold focus:outline-none focus:border-amber-500"
                 >
-                  {translatorOptions.map((tm) => (
-                    <option key={tm.id} value={tm.id}>
-                      {tm.name}
+                  {clarifierOptions.map((cm) => (
+                    <option key={cm.id} value={cm.id}>
+                      {cm.name}
                     </option>
                   ))}
                 </select>
               </div>
             </div>
 
-            {outputLanguages.length > 0 && (
+            <div className="space-y-1">
+              <label className="text-[11px] font-medium text-slate-400">
+                3. {t('localTranslationModel')}
+              </label>
+              <select
+                value={translationModel}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setTranslationModel(val);
+                  if (val === 'none') {
+                    setTargetLanguage('none');
+                  } else if (targetLanguage === 'none') {
+                    setTargetLanguage('en');
+                  }
+                  if (isEdit && hasExistingAudio) {
+                    setRetranscribe(true);
+                  }
+                }}
+                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-semibold focus:outline-none focus:border-emerald-500"
+              >
+                {translatorOptions.map((tm) => (
+                  <option key={tm.id} value={tm.id}>
+                    {tm.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {outputLanguages.length > 0 && translationModel !== 'none' && (
               <div className="flex items-center justify-between pt-1 border-t border-slate-800/80">
                 <span className="text-[11px] text-slate-400 font-medium flex items-center gap-1.5">
                   <Globe className="w-3.5 h-3.5 text-indigo-400" />
@@ -1785,7 +2114,11 @@ export const SessionDialogModal: React.FC<SessionDialogModalProps> = ({
                 <select
                   value={targetLanguage}
                   onChange={(e) => {
-                    setTargetLanguage(e.target.value);
+                    const val = e.target.value;
+                    setTargetLanguage(val);
+                    if (val === 'none') {
+                      setTranslationModel('none');
+                    }
                     if (isEdit && hasExistingAudio) {
                       setRetranscribe(true);
                     }
@@ -1794,7 +2127,10 @@ export const SessionDialogModal: React.FC<SessionDialogModalProps> = ({
                 >
                   {outputLanguages.map((lang) => (
                     <option key={lang.code} value={lang.code}>
-                      {lang.name} ({lang.code.toUpperCase()})
+                      {lang.name}{' '}
+                      {lang.code !== 'none'
+                        ? `(${lang.code.toUpperCase()})`
+                        : ''}
                     </option>
                   ))}
                 </select>
@@ -1846,7 +2182,11 @@ interface OnboardingWizardModalProps {
   progressText: string | null;
   isBusy: boolean;
   onStorageUpdated: (status: ModelsStatus) => void;
-  onComplete: (whisperId: string, translationId: string) => void;
+  onComplete: (
+    whisperId: string,
+    translationId: string,
+    clarificationId?: string
+  ) => void;
 }
 
 export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
@@ -1863,7 +2203,9 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
   const [storagePathInput, setStoragePathInput] = useState<string>('');
   const [pathSavedNotice, setPathSavedNotice] = useState(false);
   const [pathError, setPathError] = useState<string | null>(null);
-  const [selectedWhisper, setSelectedWhisper] = useState<string>('tiny');
+  const [selectedWhisper, setSelectedWhisper] = useState<string>('small');
+  const [selectedClarifier, setSelectedClarifier] =
+    useState<string>('whisper-context');
   const [selectedTranslator, setSelectedTranslator] =
     useState<string>('opus-mt-da-en');
 
@@ -1887,6 +2229,11 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
   const chosenWhisperObj = modelsStatus.whisper_models.find(
     (w) => w.id === selectedWhisper
   );
+  const chosenClarifierObj = (
+    modelsStatus.clarification_models ||
+    FALLBACK_MODELS_STATUS.clarification_models ||
+    []
+  ).find((cm) => cm.id === selectedClarifier);
   const chosenTranslatorObj = (modelsStatus.translation_models || []).find(
     (tm) => tm.id === selectedTranslator
   );
@@ -1894,6 +2241,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
   const isChosenSelectionReady =
     spkDownloaded &&
     !!chosenWhisperObj?.downloaded &&
+    (chosenClarifierObj ? !!chosenClarifierObj.downloaded : true) &&
     !!chosenTranslatorObj?.downloaded;
 
   const handleSaveStoragePath = async (customPath?: string) => {
@@ -2214,48 +2562,98 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                   </div>
                 </div>
 
-                {/* Stage 3: Local Translation AI Model */}
-                <div className="p-4 rounded-2xl bg-slate-950/60 border border-slate-800 space-y-2.5">
-                  <div className="flex items-center gap-2 text-xs font-bold text-white">
-                    <Languages className="w-4 h-4 text-emerald-400" />
-                    <span>{t('chooseTranslationModel')}</span>
-                  </div>
-                  <div className="space-y-2">
-                    {(modelsStatus.translation_models || [])
-                      .filter((tm) => tm.id !== 'whisper-native')
-                      .map((tm) => {
-                        const isSel = selectedTranslator === tm.id;
+                {/* Stage 3 & Stage 4: Context Clarifier + Local Translation AI Model */}
+                <div className="space-y-4">
+                  {/* Stage 3: Context Word Clarifier (3rd Model) */}
+                  <div className="p-4 rounded-2xl bg-slate-950/60 border border-slate-800 space-y-2.5">
+                    <div className="flex items-center gap-2 text-xs font-bold text-white">
+                      <Sparkles className="w-4 h-4 text-amber-400" />
+                      <span>{t('chooseClarifierModel')}</span>
+                    </div>
+                    <div className="space-y-2">
+                      {(
+                        modelsStatus.clarification_models ||
+                        FALLBACK_MODELS_STATUS.clarification_models ||
+                        []
+                      ).map((cm) => {
+                        const isSel = selectedClarifier === cm.id;
                         return (
                           <div
-                            key={tm.id}
-                            onClick={() => setSelectedTranslator(tm.id)}
+                            key={cm.id}
+                            onClick={() => setSelectedClarifier(cm.id)}
                             className={`p-3 rounded-xl border cursor-pointer transition flex items-start justify-between gap-2 ${
                               isSel
-                                ? 'bg-emerald-950/25 border-emerald-500'
+                                ? 'bg-amber-950/25 border-amber-500'
                                 : 'bg-slate-900 border-slate-800 hover:border-slate-700'
                             }`}
                           >
                             <div>
                               <div className="text-xs font-bold text-white">
-                                {tm.name}
+                                {cm.name}
                               </div>
                               <div className="text-[11px] text-slate-400 mt-0.5">
-                                {tm.description}
+                                {cm.description}
                               </div>
                             </div>
-                            {tm.downloaded ? (
+                            {cm.downloaded ? (
                               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 text-[10px] font-semibold border border-emerald-500/30 shrink-0">
                                 <CheckCircle2 className="w-3 h-3" />
                                 {t('readyOffline')}
                               </span>
                             ) : (
                               <span className="text-[10px] font-mono text-slate-400 bg-slate-800 px-1.5 py-0.5 rounded shrink-0">
-                                ~{tm.size_mb} MB
+                                ~{cm.size_mb} MB
                               </span>
                             )}
                           </div>
                         );
                       })}
+                    </div>
+                  </div>
+
+                  {/* Stage 4: Local Translation AI Model */}
+                  <div className="p-4 rounded-2xl bg-slate-950/60 border border-slate-800 space-y-2.5">
+                    <div className="flex items-center gap-2 text-xs font-bold text-white">
+                      <Languages className="w-4 h-4 text-emerald-400" />
+                      <span>{t('chooseTranslationModelStep4')}</span>
+                    </div>
+                    <div className="space-y-2">
+                      {(modelsStatus.translation_models || [])
+                        .filter((tm) => tm.id !== 'whisper-native')
+                        .map((tm) => {
+                          const isSel = selectedTranslator === tm.id;
+                          return (
+                            <div
+                              key={tm.id}
+                              onClick={() => setSelectedTranslator(tm.id)}
+                              className={`p-3 rounded-xl border cursor-pointer transition flex items-start justify-between gap-2 ${
+                                isSel
+                                  ? 'bg-emerald-950/25 border-emerald-500'
+                                  : 'bg-slate-900 border-slate-800 hover:border-slate-700'
+                              }`}
+                            >
+                              <div>
+                                <div className="text-xs font-bold text-white">
+                                  {tm.name}
+                                </div>
+                                <div className="text-[11px] text-slate-400 mt-0.5">
+                                  {tm.description}
+                                </div>
+                              </div>
+                              {tm.downloaded ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 text-[10px] font-semibold border border-emerald-500/30 shrink-0">
+                                  <CheckCircle2 className="w-3 h-3" />
+                                  {t('readyOffline')}
+                                </span>
+                              ) : (
+                                <span className="text-[10px] font-mono text-slate-400 bg-slate-800 px-1.5 py-0.5 rounded shrink-0">
+                                  ~{tm.size_mb} MB
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -2301,7 +2699,8 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                       triggerModelDownload(
                         'onboarding',
                         selectedWhisper,
-                        selectedTranslator
+                        selectedTranslator,
+                        selectedClarifier
                       )
                     }
                     className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-xs font-semibold text-white shadow-lg shadow-indigo-600/25 transition"
@@ -2319,7 +2718,11 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                   type="button"
                   disabled={isBusy || !isChosenSelectionReady}
                   onClick={() =>
-                    onComplete(selectedWhisper, selectedTranslator)
+                    onComplete(
+                      selectedWhisper,
+                      selectedTranslator,
+                      selectedClarifier
+                    )
                   }
                   className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-xs font-semibold text-white shadow-lg shadow-emerald-600/25 transition"
                 >

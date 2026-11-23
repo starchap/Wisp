@@ -21,6 +21,8 @@ except ImportError:
 
 import config
 from config import (
+    CLARIFICATION_MODELS,
+    DEFAULT_CLARIFICATION_MODEL,
     DEFAULT_WHISPER_MODEL,
     NLLB_REPO_ID,
     OPUS_PAIR_REPOS,
@@ -30,6 +32,7 @@ from config import (
 )
 
 WHISPER_MAP = {m["id"]: m for m in WHISPER_MODELS}
+CLARIFICATION_MAP = {m["id"]: m for m in CLARIFICATION_MODELS}
 
 
 def _get_ssl_contexts() -> List[ssl.SSLContext]:
@@ -170,6 +173,44 @@ def is_nllb_model_downloaded() -> bool:
     )
 
 
+def get_clarification_model_dir(model_id: str) -> Path:
+    return config.MODELS_DIR / f"clarifier-{model_id}"
+
+
+def is_clarification_model_downloaded(model_id: str) -> bool:
+    if model_id in ("none", "whisper-context"):
+        return True
+    info = CLARIFICATION_MAP.get(model_id)
+    if not info or info.get("type") != "qwen-onnx":
+        return True
+    d = get_clarification_model_dir(model_id)
+    onnx_rel = info.get("onnx_file", "onnx/model_q4.onnx")
+    return (
+        (d / onnx_rel).exists()
+        and (d / "tokenizer.json").exists()
+        and (d / "config.json").exists()
+    )
+
+
+def ensure_clarification_model(model_id: str = DEFAULT_CLARIFICATION_MODEL) -> Path:
+    """Download a local ONNX Context Clarification LLM (e.g. Qwen2.5-0.5B or Qwen2.5-1.5B ONNX Q4)."""
+    if model_id in ("none", "whisper-context"):
+        return config.MODELS_DIR
+    info = CLARIFICATION_MAP.get(model_id)
+    if not info or info.get("type") != "qwen-onnx":
+        return config.MODELS_DIR
+    target_dir = get_clarification_model_dir(model_id)
+    if is_clarification_model_downloaded(model_id):
+        return target_dir
+    target_dir.mkdir(parents=True, exist_ok=True)
+    repo_id = info["hf_repo"]
+    onnx_rel = info.get("onnx_file", "onnx/model_q4.onnx")
+    print(f"[ModelManager] Downloading Context Clarifier '{model_id}' from {repo_id} to {target_dir} ...")
+    for fname in ("config.json", "tokenizer.json", "tokenizer_config.json", onnx_rel):
+        hf_hub_download(repo_id=repo_id, filename=fname, local_dir=str(target_dir))
+    return target_dir
+
+
 def ensure_opus_pair_model(pair_key: str = "da-en") -> Path:
     """Download a specialized Helsinki-NLP OPUS-MT ONNX INT8 model for `pair_key` (e.g., 'da-en', 'en-da', 'es-en')."""
     target_dir = get_opus_pair_dir(pair_key)
@@ -282,6 +323,11 @@ def delete_local_model(model_type: str, model_id: str = "") -> None:
     ):
         if config.NLLB_LOCAL_DIR.exists():
             shutil.rmtree(config.NLLB_LOCAL_DIR, ignore_errors=True)
+    elif model_type == "clarification":
+        if model_id and model_id not in ("none", "whisper-context"):
+            d = get_clarification_model_dir(model_id)
+            if d.exists():
+                shutil.rmtree(d, ignore_errors=True)
     elif model_type == "speaker":
         if config.SPEAKER_EMBEDDING_MODEL_PATH.exists():
             config.SPEAKER_EMBEDDING_MODEL_PATH.unlink(missing_ok=True)
@@ -299,6 +345,18 @@ def get_models_status() -> Dict:
             }
         )
 
+    clarification_list: List[Dict] = []
+    for cm in CLARIFICATION_MODELS:
+        cid = cm["id"]
+        dl = is_clarification_model_downloaded(cid)
+        if cid == "none":
+            lpath = "Skipped (Raw Speech-to-Text)"
+        elif cid == "whisper-context":
+            lpath = "Built into Whisper Context Validator"
+        else:
+            lpath = str(get_clarification_model_dir(cid))
+        clarification_list.append({**cm, "downloaded": dl, "local_path": lpath})
+
     translation_list: List[Dict] = []
     for tm in TRANSLATION_MODELS:
         if tm["id"] == "opus-mt-da-en":
@@ -307,6 +365,9 @@ def get_models_status() -> Dict:
         elif tm["id"] == "nllb-200-600M":
             dl = is_nllb_model_downloaded()
             lpath = str(config.NLLB_LOCAL_DIR)
+        elif tm["id"] == "none":
+            dl = True
+            lpath = "Skipped (Transcription Only)"
         else:
             dl = True
             lpath = "Built into Whisper ASR"
@@ -320,8 +381,9 @@ def get_models_status() -> Dict:
         "storage_directory": str(config.DATA_DIR),
         "models_directory": str(config.MODELS_DIR),
         "sessions_directory": str(config.SESSIONS_DIR),
-        "needs_onboarding": not (spk_ready and any_whisper_ready and any_neural_translator_ready),
+        "needs_onboarding": not (spk_ready and any_whisper_ready),
         "whisper_models": whisper_list,
+        "clarification_models": clarification_list,
         "translation_models": translation_list,
         "speaker_diarization": {
             "id": "3dspeaker-eres2net",

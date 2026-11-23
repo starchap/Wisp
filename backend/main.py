@@ -28,6 +28,8 @@ from pydantic import BaseModel
 from audio_capture import BackendLiveRecorder, list_audio_devices
 import config
 from config import (
+    CLARIFICATION_MODELS,
+    DEFAULT_CLARIFICATION_MODEL,
     DEFAULT_TRANSLATION_MODEL,
     DEFAULT_WHISPER_MODEL,
     LANGUAGE_NAME_MAP,
@@ -38,6 +40,7 @@ from config import (
 )
 from models_manager import (
     delete_local_model,
+    ensure_clarification_model,
     ensure_nllb_model,
     ensure_opus_pair_model,
     ensure_speaker_model,
@@ -120,6 +123,8 @@ def get_config():
         "languages": SUPPORTED_LANGUAGES,
         "whisper_models": WHISPER_MODELS,
         "default_whisper_model": DEFAULT_WHISPER_MODEL,
+        "clarification_models": CLARIFICATION_MODELS,
+        "default_clarification_model": DEFAULT_CLARIFICATION_MODEL,
         "translation_models": TRANSLATION_MODELS,
         "default_translation_model": DEFAULT_TRANSLATION_MODEL,
         "device": pipeline.device,
@@ -162,8 +167,9 @@ def api_set_storage_path(req: StoragePathRequest):
 
 
 class DownloadModelRequest(BaseModel):
-    model_type: str  # "whisper", "speaker", "opus", "nllb", "all_recommended", or "onboarding"
+    model_type: str  # "whisper", "speaker", "clarification", "opus", "nllb", "all_recommended", or "onboarding"
     whisper_id: Optional[str] = DEFAULT_WHISPER_MODEL
+    clarification_id: Optional[str] = DEFAULT_CLARIFICATION_MODEL
     translation_id: Optional[str] = DEFAULT_TRANSLATION_MODEL
 
 
@@ -173,22 +179,30 @@ def api_download_model(req: DownloadModelRequest):
     def _worker():
         try:
             if req.model_type in ("speaker", "all_recommended", "onboarding"):
-                broadcast_event("model_progress", {"status": "Downloading Step 1/3: 3D-Speaker Diarization ONNX Model (~26 MB)...", "busy": True})
+                broadcast_event("model_progress", {"status": "Downloading Step 1/4: 3D-Speaker Diarization ONNX Model (~26 MB)...", "busy": True})
                 ensure_speaker_model()
             if req.model_type in ("whisper", "all_recommended", "onboarding"):
                 w_id = req.whisper_id or DEFAULT_WHISPER_MODEL
-                broadcast_event("model_progress", {"status": f"Downloading Step 2/3: Whisper '{w_id}' Speech-to-Text Model...", "busy": True})
+                broadcast_event("model_progress", {"status": f"Downloading Step 2/4: Whisper '{w_id}' Speech-to-Text Model...", "busy": True})
                 ensure_whisper_model(w_id)
+            if req.model_type == "clarification" or (
+                req.model_type == "onboarding"
+                and req.clarification_id
+                and req.clarification_id not in ("none", "whisper-context")
+            ):
+                c_id = req.clarification_id or DEFAULT_CLARIFICATION_MODEL
+                broadcast_event("model_progress", {"status": f"Downloading Step 3/4: Context Clarifier '{c_id}' ONNX Model...", "busy": True})
+                ensure_clarification_model(c_id)
             if req.model_type in ("opus", "all_recommended") or (
                 req.model_type == "onboarding" and req.translation_id == "opus-mt-da-en"
             ):
-                broadcast_event("model_progress", {"status": "Downloading Step 3/3: Specialized OPUS-MT Danish <-> English ONNX Models (~85 MB)...", "busy": True})
+                broadcast_event("model_progress", {"status": "Downloading Step 4/4: Specialized OPUS-MT Danish <-> English ONNX Models (~85 MB)...", "busy": True})
                 ensure_opus_pair_model("da-en")
                 ensure_opus_pair_model("en-da")
             if req.model_type == "nllb" or (
                 req.model_type == "onboarding" and req.translation_id == "nllb-200-600M"
             ):
-                broadcast_event("model_progress", {"status": "Downloading Step 3/3: Meta NLLB-200 Offline Translator (~580 MB)...", "busy": True})
+                broadcast_event("model_progress", {"status": "Downloading Step 4/4: Meta NLLB-200 Offline Translator (~580 MB)...", "busy": True})
                 ensure_nllb_model()
             broadcast_event("model_progress", {"status": "All requested models are ready offline!", "busy": False, "models_status": get_models_status()})
         except Exception as exc:
@@ -199,7 +213,7 @@ def api_download_model(req: DownloadModelRequest):
 
 
 class DeleteModelRequest(BaseModel):
-    model_type: str  # "whisper", "speaker", "opus", "nllb", or "translation"
+    model_type: str  # "whisper", "speaker", "clarification", "opus", "nllb", or "translation"
     model_id: Optional[str] = ""
 
 
@@ -237,7 +251,9 @@ class CreateSessionRequest(BaseModel):
     session_type: str = "file"
     target_language: str = "en"
     whisper_model: str = DEFAULT_WHISPER_MODEL
+    clarification_model: str = DEFAULT_CLARIFICATION_MODEL
     translation_model: str = DEFAULT_TRANSLATION_MODEL
+    spoken_languages: Optional[List[str]] = None
 
 
 @app.get("/api/sessions")
@@ -252,7 +268,9 @@ def api_create_session(req: CreateSessionRequest):
         session_type=req.session_type,
         target_language=req.target_language,
         whisper_model=req.whisper_model,
+        clarification_model=req.clarification_model,
         translation_model=req.translation_model,
+        spoken_languages=req.spoken_languages,
     )
     return session.to_dict()
 
@@ -279,7 +297,9 @@ class UpdateSessionRequest(BaseModel):
     title: Optional[str] = None
     target_language: Optional[str] = None
     whisper_model: Optional[str] = None
+    clarification_model: Optional[str] = None
     translation_model: Optional[str] = None
+    spoken_languages: Optional[List[str]] = None
     retranslate_existing: bool = True
     retranscribe_existing: bool = False
 
@@ -322,25 +342,42 @@ def api_update_session(session_id: str, req: UpdateSessionRequest):
         raise HTTPException(status_code=404, detail="Session not found")
 
     retranslate_needed = False
+    clarification_changed = False
     whisper_changed = False
+    spoken_langs_changed = False
     if req.title is not None:
         session.title = req.title
     if req.whisper_model is not None and req.whisper_model != session.whisper_model:
         session.whisper_model = req.whisper_model
         whisper_changed = True
+    if (
+        req.clarification_model is not None
+        and req.clarification_model != session.clarification_model
+    ):
+        session.clarification_model = req.clarification_model
+        clarification_changed = True
     if req.translation_model is not None and req.translation_model != session.translation_model:
         session.translation_model = req.translation_model
         retranslate_needed = True
     if req.target_language is not None and req.target_language != session.target_language:
         session.target_language = req.target_language
         retranslate_needed = True
+    if req.spoken_languages is not None:
+        clean_spoken = [
+            c for c in req.spoken_languages if c and c not in ("auto", "none")
+        ]
+        if clean_spoken != session.spoken_languages:
+            session.spoken_languages = clean_spoken
+            spoken_langs_changed = True
 
     store.save_session(session)
 
-    if (req.retranscribe_existing or whisper_changed) and (
+    if (req.retranscribe_existing or whisper_changed or spoken_langs_changed) and (
         session.segments or store.get_audio_path(session_id).exists()
     ):
         _trigger_session_reprocess_async(session_id)
+    elif clarification_changed and session.segments:
+        pipeline.reclarify_and_retranslate_all_segments(session)
     elif retranslate_needed and req.retranslate_existing and session.segments:
         pipeline.retranslate_all_segments(session)
 
@@ -575,12 +612,16 @@ def api_merge_speakers(session_id: str, req: MergeSpeakersRequest):
                     continue
                 clip = store.read_audio_slice(session.id, seg.start, seg.end)
                 if len(clip) >= int(SAMPLE_RATE * 0.25):
-                    det_lang, orig, trans, conf = pipeline.transcribe_and_translate_clip(
+                    conv_ctx = pipeline._build_conversation_context(session)
+                    det_lang, orig, trans, conf, raw_stt = pipeline.transcribe_and_translate_clip(
                         clip,
                         forced_language=tgt_spk.language,
                         target_language=session.target_language,
                         model_id=session.whisper_model,
+                        clarification_model=session.clarification_model,
                         translation_model=session.translation_model,
+                        allowed_languages=session.spoken_languages,
+                        conversation_context=conv_ctx,
                     )
                     if orig:
                         seg.source_language = det_lang
@@ -588,6 +629,7 @@ def api_merge_speakers(session_id: str, req: MergeSpeakersRequest):
                         seg.translated_text = trans
                         seg.target_language = session.target_language
                         seg.confidence = round(conf, 3)
+                        seg.raw_text = raw_stt
             store.save_session(session)
             broadcast_event("session_updated", session.to_dict())
             broadcast_event(
@@ -623,12 +665,16 @@ def api_reassign_segment_speaker(
     if req.reprocess_with_speaker_language and spk.language != "auto":
         clip = store.read_audio_slice(session.id, target_seg.start, target_seg.end)
         if len(clip) > int(SAMPLE_RATE * 0.2):
-            det_lang, orig, trans, conf = pipeline.transcribe_and_translate_clip(
+            conv_ctx = pipeline._build_conversation_context(session)
+            det_lang, orig, trans, conf, raw_stt = pipeline.transcribe_and_translate_clip(
                 clip,
                 forced_language=spk.language,
                 target_language=session.target_language,
                 model_id=session.whisper_model,
+                clarification_model=session.clarification_model,
                 translation_model=session.translation_model,
+                allowed_languages=session.spoken_languages,
+                conversation_context=conv_ctx,
             )
             if orig:
                 target_seg.source_language = det_lang
@@ -636,6 +682,7 @@ def api_reassign_segment_speaker(
                 target_seg.translated_text = trans
                 target_seg.target_language = session.target_language
                 target_seg.confidence = round(conf, 3)
+                target_seg.raw_text = raw_stt
 
     store.save_session(session)
     broadcast_event("session_updated", session.to_dict())

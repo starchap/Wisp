@@ -14,10 +14,25 @@ export const TRANSLATIONS: Record<UILanguage, Record<string, string>> = {
   en: {
     // Top HeaderBar
     speechToTextModel: 'Speech-to-Text Model',
+    contextClarifierModel: 'Context Word Clarifier',
     localTranslationModel: 'Local Translation AI Model',
     outputLanguage: 'Output Language',
     downloadMoreModels: '+ Download more models...',
     settings: 'Settings',
+    meetingSpokenLanguagesLabel: 'Meeting / Interview Spoken Languages',
+    meetingSpokenLanguagesDesc:
+      'Select the languages spoken in this interview (e.g. Danish + English) so Speech-to-Text & Clarification know what to look for, or leave on Auto (All Languages).',
+    autoAllLanguages: 'Auto (All Languages)',
+    stepClarifyBadge: 'Step 3: Context Word Clarifier',
+    stepClarifyDesc:
+      'Validates and corrects misheard words in each speaker section based on conversation context without restructuring sentences.',
+    stepClarifyFooter: 'Output: Context-Validated Text',
+    step4TranslateBadge: 'Step 4: Local AI Translation Models',
+    chooseClarifierModel: '3. Choose Context Word Clarifier (Optional)',
+    chooseTranslationModelStep4: '4. Choose Local Translation AI Model',
+    defaultClarifierTitle: 'Default Context Word Clarifier Model',
+    defaultClarifierDesc:
+      'Validates misheard words against conversation context before translation (without restructuring sentences)',
 
     // Left Sidebar (Recorded Sessions)
     recordedSessions: 'Recorded Sessions',
@@ -198,10 +213,25 @@ export const TRANSLATIONS: Record<UILanguage, Record<string, string>> = {
   da: {
     // Top HeaderBar
     speechToTextModel: 'Tale-til-Tekst Model',
+    contextClarifierModel: 'Kontekst Ord-Validering',
     localTranslationModel: 'Lokal AI Oversættelsesmodel',
     outputLanguage: 'Outputsprog',
     downloadMoreModels: '+ Hent flere modeller...',
     settings: 'Indstillinger',
+    meetingSpokenLanguagesLabel: 'Talte sprog i mødet / interviewet',
+    meetingSpokenLanguagesDesc:
+      'Vælg hvilke sprog samtalen foregår på (f.eks. Dansk + Engelsk), så talegenkendelse og ord-validering ved præcis, hvad de skal kigge efter – eller vælg Auto (Alle sprog).',
+    autoAllLanguages: 'Auto (Alle sprog)',
+    stepClarifyBadge: 'Trin 3: Kontekst Ord-Validering',
+    stepClarifyDesc:
+      'Analyserer hvad samtalen handler om og retter fejlhørte ord i hvert afsnit ud fra konteksten – uden at omstrukturere sætningerne.',
+    stepClarifyFooter: 'Output: Kontekst-valideret tekst',
+    step4TranslateBadge: 'Trin 4: Lokale AI Oversættelsesmodeller',
+    chooseClarifierModel: '3. Vælg Kontekst Ord-Valideringsmodel (Valgfri)',
+    chooseTranslationModelStep4: '4. Vælg Lokal AI Oversættelsesmodel',
+    defaultClarifierTitle: 'Standard Kontekst Ord-Valideringsmodel',
+    defaultClarifierDesc:
+      'Validerer fejlhørte ord ud fra samtalens kontekst før oversættelse (uden at ændre sætningsstrukturen)',
 
     // Left Sidebar (Recorded Sessions)
     recordedSessions: 'Optagede Sessioner',
@@ -379,10 +409,25 @@ export const TRANSLATIONS: Record<UILanguage, Record<string, string>> = {
   },
   es: {
     speechToTextModel: 'Modelo de Voz a Texto',
+    contextClarifierModel: 'Validador Contextual de Palabras',
     localTranslationModel: 'Modelo IA de Traducción Local',
     outputLanguage: 'Idioma de Salida',
     downloadMoreModels: '+ Descargar más modelos...',
     settings: 'Ajustes',
+    meetingSpokenLanguagesLabel: 'Idiomas hablados en la reunión / entrevista',
+    meetingSpokenLanguagesDesc:
+      'Seleccione los idiomas hablados en la entrevista (p. ej. Danés + Inglés) o Auto (Todos los idiomas).',
+    autoAllLanguages: 'Auto (Todos los idiomas)',
+    stepClarifyBadge: 'Paso 3: Validador Contextual de Palabras',
+    stepClarifyDesc:
+      'Valida y corrige palabras mal escuchadas según el contexto de la conversación sin reestructurar las frases.',
+    stepClarifyFooter: 'Salida: Texto validado por contexto',
+    step4TranslateBadge: 'Paso 4: Modelos IA de Traducción Local',
+    chooseClarifierModel: '3. Elegir Validador Contextual de Palabras',
+    chooseTranslationModelStep4: '4. Elegir Modelo IA de Traducción Local',
+    defaultClarifierTitle: 'Modelo Validador Contextual Predeterminado',
+    defaultClarifierDesc:
+      'Valida palabras mal escuchadas según el contexto antes de traducir',
     recordedSessions: 'Sesiones Grabadas',
     newBtn: 'Nueva',
     exportSessionTooltip: 'Exportar transcripción',
@@ -548,10 +593,25 @@ export const TRANSLATIONS: Record<UILanguage, Record<string, string>> = {
   },
   de: {
     speechToTextModel: 'Sprache-zu-Text Modell',
+    contextClarifierModel: 'Kontext-Wortvalidierung',
     localTranslationModel: 'Lokales KI-Übersetzungsmodell',
     outputLanguage: 'Ausgabesprache',
     downloadMoreModels: '+ Weitere Modelle laden...',
     settings: 'Einstellungen',
+    meetingSpokenLanguagesLabel: 'Gesprochene Sprachen im Meeting / Interview',
+    meetingSpokenLanguagesDesc:
+      'Wählen Sie die gesprochenen Sprachen (z. B. Dänisch + Englisch) oder Auto (Alle Sprachen).',
+    autoAllLanguages: 'Auto (Alle Sprachen)',
+    stepClarifyBadge: 'Schritt 3: Kontext-Wortvalidierung',
+    stepClarifyDesc:
+      'Überprüft und korrigiert falsch verstandene Wörter anhand des Gesprächskontexts, ohne Sätze umzustrukturieren.',
+    stepClarifyFooter: 'Ausgabe: Kontextvalidierter Text',
+    step4TranslateBadge: 'Schritt 4: Lokale KI-Übersetzungsmodelle',
+    chooseClarifierModel: '3. Kontext-Wortvalidierungsmodell wählen',
+    chooseTranslationModelStep4: '4. Lokales KI-Übersetzungsmodell wählen',
+    defaultClarifierTitle: 'Standard Kontext-Wortvalidierungsmodell',
+    defaultClarifierDesc:
+      'Validiert falsch gehörte Wörter anhand des Gesprächskontexts vor der Übersetzung',
     recordedSessions: 'Aufgezeichnete Sitzungen',
     newBtn: 'Neu',
     exportSessionTooltip: 'Transkript exportieren',

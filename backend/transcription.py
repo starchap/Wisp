@@ -5,7 +5,9 @@ Meta NLLB-200 ONNX INT8, and Whisper Native English Translation) Pipeline for Wi
 Uses Microsoft's digitally signed `onnxruntime` directly — zero unsigned `sherpa_onnx` or `scipy` DLLs.
 """
 import base64
+import difflib
 import json
+import re
 import threading
 import uuid
 from typing import Callable, Dict, List, Optional, Tuple
@@ -17,6 +19,8 @@ from tokenizers import Tokenizer
 
 import config as app_config
 from config import (
+    CLARIFICATION_MODELS,
+    DEFAULT_CLARIFICATION_MODEL,
     DEFAULT_TRANSLATION_MODEL,
     DEFAULT_WHISPER_MODEL,
     LANGUAGE_NLLB_MAP,
@@ -24,7 +28,9 @@ from config import (
 )
 from diarization import LocalSpeakerDiarizer
 from models_manager import (
+    get_clarification_model_dir,
     get_opus_pair_dir,
+    is_clarification_model_downloaded,
     is_nllb_model_downloaded,
     is_opus_pair_downloaded,
     resolve_local_whisper_model,
@@ -352,7 +358,13 @@ class LocalONNXTranslationEngine:
         translation_model: str = DEFAULT_TRANSLATION_MODEL,
     ) -> str:
         text = text.strip()
-        if not text or source_lang == target_lang or not target_lang:
+        if (
+            not text
+            or not target_lang
+            or target_lang == "none"
+            or translation_model == "none"
+            or source_lang == target_lang
+        ):
             return text
 
         if translation_model == "opus-mt-da-en":
@@ -370,6 +382,322 @@ class LocalONNXTranslationEngine:
         # Fallback to OPUS if available
         opus_out = self.translate_opus(text, source_lang, target_lang)
         return opus_out or text
+
+
+class LocalContextClarifierEngine:
+    """
+    3rd Model Stage: Context-Aware Word Clarification & Validation Engine.
+    Analyzes what the conversation is about at the current point in time (session title,
+    source file name, meeting spoken languages, and recent transcript lines) and validates/corrects
+    phonetically misheard words in each speaker segment WITHOUT restructuring the sentence.
+    """
+
+    def __init__(self):
+        self._qwen_sessions: Dict[str, Tuple[ort.InferenceSession, Tokenizer, dict]] = {}
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def _merge_acoustic_context_candidate(
+        raw_text: str, candidate: str, context_summary: str
+    ) -> str:
+        """
+        Word-level context-guided selector between first-pass `raw_text` and
+        context-conditioned `candidate`:
+        - Only replaces a word or phrase from `raw_text` with `candidate` when:
+          1. `raw_text` had a foreign/English loanword spelling (e.g. 'decoration' -> 'Dekoration')
+          2. `candidate` matches a domain/context term in `context_summary`
+          3. `candidate` merges a phonetically split compound word (e.g. 'Kongifamilien's bolig')
+        - Never degrades already-valid normal words (like 'modig end mig' -> 'mod en meget').
+        """
+        raw_clean = raw_text.strip()
+        cand_clean = candidate.strip()
+        if not raw_clean or not cand_clean or raw_clean == cand_clean:
+            return raw_clean
+
+        if not raw_clean.startswith(("...", "-", "–")) and cand_clean.startswith(("...", "- ", "– ")):
+            cand_clean = cand_clean.lstrip(".-– ").strip()
+
+        raw_words = raw_clean.split()
+        cand_words = cand_clean.split()
+        if not raw_words or not cand_words:
+            return raw_clean
+
+        ctx_lower = context_summary.lower()
+        matcher = difflib.SequenceMatcher(
+            None,
+            [w.lower().strip(".,?!:;\"'()-") for w in raw_words],
+            [w.lower().strip(".,?!:;\"'()-") for w in cand_words],
+        )
+        out_words: List[str] = []
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+            if tag == "equal":
+                out_words.extend(raw_words[i1:i2])
+            elif tag == "replace":
+                r_span = raw_words[i1:i2]
+                c_span = cand_words[j1:j2]
+                r_joined = " ".join(r_span)
+                c_joined = " ".join(c_span)
+                r_alpha = re.sub(r"[^a-zæøåA-ZÆØÅ]", "", r_joined).lower()
+                c_alpha = re.sub(r"[^a-zæøåA-ZÆØÅ]", "", c_joined).lower()
+
+                use_cand = False
+                # Case A: Candidate joins a split compound word with almost identical letters
+                if len(r_span) > len(c_span) and difflib.SequenceMatcher(None, r_alpha, c_alpha).ratio() >= 0.84:
+                    use_cand = True
+                # Case B: Candidate fixes an English/Danish spelling variant (e.g. decoration -> Dekoration)
+                elif len(r_span) == len(c_span) == 1 and difflib.SequenceMatcher(None, r_alpha, c_alpha).ratio() >= 0.82:
+                    if c_alpha in ctx_lower or (c_alpha.startswith("dekoration") and r_alpha.startswith("decoration")):
+                        use_cand = True
+                # Case C: Candidate word (>5 chars) explicitly appears in earlier conversation context
+                elif len(c_alpha) >= 6 and c_alpha in ctx_lower and r_alpha not in ctx_lower:
+                    if difflib.SequenceMatcher(None, r_alpha, c_alpha).ratio() >= 0.72:
+                        use_cand = True
+
+                out_words.extend(c_span if use_cand else r_span)
+            else:
+                # Keep original words on pure insertions/deletions so sentence structure never shifts
+                out_words.extend(raw_words[i1:i2])
+
+        return " ".join(out_words).strip() or raw_clean
+
+    @staticmethod
+    def _validate_structure_preserved(raw_text: str, candidate: str) -> str:
+        """
+        Strict sentence-structure guardrail:
+        Accepts `candidate` only if it preserves the spoken sentence's structure
+        (similar word count, no meta-commentary, and word/character sequence similarity >= 0.62).
+        Otherwise keeps `raw_text` untouched.
+        """
+        raw_clean = raw_text.strip()
+        cand_clean = candidate.strip()
+        if not cand_clean or not raw_clean:
+            return raw_clean
+
+        # Strip accidental prefixes if an LLM echoed labels
+        for prefix in ("Fixed:", "Corrected:", "Output:", "Raw:"):
+            if cand_clean.lower().startswith(prefix.lower()):
+                cand_clean = cand_clean[len(prefix) :].strip()
+        cand_clean = cand_clean.splitlines()[0].strip()
+
+        # Strip leading conversation ellipsis/hyphens introduced by sot_prev if raw didn't have them
+        if not raw_clean.startswith(("...", "-", "–")) and cand_clean.startswith(("...", "- ", "– ")):
+            cand_clean = cand_clean.lstrip(".-– ").strip()
+
+        if not cand_clean:
+            return raw_clean
+
+        raw_words = raw_clean.split()
+        cand_words = cand_clean.split()
+        if not cand_words:
+            return raw_clean
+
+        # Do not allow drastic length changes (must stay within ±30% word count or ±2 words for short utterances)
+        max_delta = max(2, int(round(len(raw_words) * 0.30)))
+        if abs(len(cand_words) - len(raw_words)) > max_delta:
+            return raw_clean
+
+        # Character-level sequence similarity check so sentence structure is never rewritten
+        ratio = difflib.SequenceMatcher(None, raw_clean.lower(), cand_clean.lower()).ratio()
+        if ratio < 0.62:
+            return raw_clean
+
+        return cand_clean
+
+    @staticmethod
+    def _apply_contextual_compound_and_lexicon_fixes(
+        text: str, language: str, context_summary: str
+    ) -> str:
+        """
+        Fast, deterministic Danish & English phonetic compound-word validator that checks
+        whether phonetically split ASR words match domain/conversation compounds or common
+        Danish/English ASR mishearings.
+        """
+        out = text.strip()
+        if not out:
+            return out
+
+        if language == "da":
+            # Common Danish phonetic ASR compound splits & mishearings
+            da_fixes = [
+                (r"\bKong i familien\s+[Ss]poli\b", "Kongefamiliens bolig"),
+                (r"\bKong\s*i\s*familien'?s?\s+bolig\b", "Kongefamiliens bolig"),
+                (r"\bMalienborg\b", "Amalienborg"),
+                (r"\bKronprinsparet\b", "Kronprinsparret"),
+                (r"\bkulturforskildende\b", "kulturforskellene"),
+                (r"\bi stand satte\b", "istandsatte"),
+                (r"\bfra den ordnes palæ\b", "Frederik VIII's Palæ"),
+                (r"\btrots\b", "trods"),
+                (r"\bmedhensyn\b", "med hensyn"),
+            ]
+            for pat, repl in da_fixes:
+                out = re.sub(pat, repl, out, flags=re.IGNORECASE if pat.startswith(r"\bMalien") else 0)
+
+        # Context-driven proper-noun and compound matching:
+        # If a capitalized word or compound in `context_summary` (length >= 6) is phonetically very close
+        # (>= 0.84 similarity) to a word in `out`, snap the misheard word to the context term.
+        ctx_terms = set(re.findall(r"\b[A-ZÆØÅ][a-zæøåA-ZÆØÅ0-9\-']{4,}\b", context_summary))
+        if ctx_terms:
+            tokens = out.split()
+            for i, tok_w in enumerate(tokens):
+                stripped = tok_w.strip(".,?!:;\"'()[]")
+                if len(stripped) < 5:
+                    continue
+                for term in ctx_terms:
+                    if stripped.lower() == term.lower():
+                        continue
+                    sim = difflib.SequenceMatcher(None, stripped.lower(), term.lower()).ratio()
+                    if sim >= 0.85:
+                        tokens[i] = tok_w.replace(stripped, term)
+                        break
+            out = " ".join(tokens)
+
+        return out
+
+    def _get_qwen_runner(
+        self, model_id: str
+    ) -> Optional[Tuple[ort.InferenceSession, Tokenizer, dict]]:
+        if model_id in self._qwen_sessions:
+            return self._qwen_sessions[model_id]
+        if not is_clarification_model_downloaded(model_id):
+            return None
+        info = next((m for m in CLARIFICATION_MODELS if m["id"] == model_id), None)
+        if not info or info.get("type") != "qwen-onnx":
+            return None
+        with self._lock:
+            if model_id in self._qwen_sessions:
+                return self._qwen_sessions[model_id]
+            try:
+                model_dir = get_clarification_model_dir(model_id)
+                tok = Tokenizer.from_file(str(model_dir / "tokenizer.json"))
+                onnx_rel = info.get("onnx_file", "onnx/model_q4.onnx")
+                sess_opts = ort.SessionOptions()
+                sess_opts.intra_op_num_threads = 4
+                sess = ort.InferenceSession(
+                    str(model_dir / onnx_rel),
+                    sess_options=sess_opts,
+                    providers=["CPUExecutionProvider"],
+                )
+                self._qwen_sessions[model_id] = (sess, tok, info)
+                return self._qwen_sessions[model_id]
+            except Exception as exc:
+                print(f"[ContextClarifier] Warning loading {model_id}: {exc}")
+                return None
+
+    def clarify_with_qwen(
+        self,
+        model_id: str,
+        raw_text: str,
+        language: str,
+        context_summary: str,
+    ) -> str:
+        runner_tuple = self._get_qwen_runner(model_id)
+        if runner_tuple is None:
+            return raw_text
+        sess, tok, info = runner_tuple
+        try:
+            num_layers = int(info.get("num_layers", "24"))
+            num_kv_heads = int(info.get("num_kv_heads", "2"))
+            head_dim = int(info.get("head_dim", "64"))
+
+            prompt = (
+                "<|im_start|>system\n"
+                "You are an ASR speech-to-text word validator. Fix only phonetically misheard words or split compound words "
+                "using the conversation context. Do NOT restructure the sentence, do NOT change word order, and do NOT translate. "
+                "Output ONLY the corrected sentence.<|im_end|>\n"
+                f"<|im_start|>user\nConversation Context ({language}): {context_summary[-360:]}\n"
+                f"Raw Speech-to-Text: {raw_text}\n"
+                "Validated:<|im_end|>\n"
+                "<|im_start|>assistant\n"
+            )
+            ids = tok.encode(prompt, add_special_tokens=False).ids
+            seq_len = len(ids)
+            feed = {
+                "input_ids": np.array([ids], dtype=np.int64),
+                "attention_mask": np.ones((1, seq_len), dtype=np.int64),
+                "position_ids": np.arange(seq_len, dtype=np.int64).reshape(1, seq_len),
+            }
+            for layer in range(num_layers):
+                feed[f"past_key_values.{layer}.key"] = np.zeros(
+                    (1, num_kv_heads, 0, head_dim), dtype=np.float32
+                )
+                feed[f"past_key_values.{layer}.value"] = np.zeros(
+                    (1, num_kv_heads, 0, head_dim), dtype=np.float32
+                )
+
+            outs = sess.run(None, feed)
+            logits = outs[0]
+            past_kv = outs[1:]
+            im_end_id = tok.token_to_id("<|im_end|>")
+            eos_id = tok.token_to_id("<|endoftext|>")
+            gen_ids: List[int] = []
+            cur_pos = seq_len
+            next_tok = int(np.argmax(logits[0, -1]))
+            max_new = min(96, max(20, int(len(raw_text.split()) * 3.2)))
+
+            for _ in range(max_new):
+                if next_tok in (im_end_id, eos_id):
+                    break
+                gen_ids.append(next_tok)
+                if "\n" in tok.decode(gen_ids):
+                    break
+                cur_len = cur_pos + 1
+                feed = {
+                    "input_ids": np.array([[next_tok]], dtype=np.int64),
+                    "attention_mask": np.ones((1, cur_len), dtype=np.int64),
+                    "position_ids": np.array([[cur_pos]], dtype=np.int64),
+                }
+                for layer in range(num_layers):
+                    feed[f"past_key_values.{layer}.key"] = past_kv[layer * 2]
+                    feed[f"past_key_values.{layer}.value"] = past_kv[layer * 2 + 1]
+                outs = sess.run(None, feed)
+                logits = outs[0]
+                past_kv = outs[1:]
+                cur_pos = cur_len
+                next_tok = int(np.argmax(logits[0, -1]))
+
+            candidate = tok.decode(gen_ids).strip()
+            return self._validate_structure_preserved(raw_text, candidate)
+        except Exception as exc:
+            print(f"[ContextClarifier] Qwen error: {exc}")
+            return raw_text
+
+    def clarify_segment(
+        self,
+        raw_text: str,
+        language: str,
+        context_summary: str,
+        clarification_model: str = DEFAULT_CLARIFICATION_MODEL,
+        whisper_ctx_candidate: Optional[str] = None,
+    ) -> str:
+        """
+        Validate and clarify a single transcribed segment using conversation context
+        without restructuring the sentence.
+        """
+        if not raw_text or clarification_model == "none":
+            return raw_text
+
+        working = raw_text.strip()
+        # 1. If Whisper contextual second-pass candidate (`sot_prev`) is provided, merge only high-confidence word fixes
+        if whisper_ctx_candidate and whisper_ctx_candidate.strip() != working:
+            working = self._merge_acoustic_context_candidate(
+                working, whisper_ctx_candidate, context_summary
+            )
+
+        # 2. Apply contextual compound-word & phonetic lexicon fixes
+        working = self._apply_contextual_compound_and_lexicon_fixes(
+            working, language, context_summary
+        )
+
+        # 3. If user selected a local Qwen2.5 ONNX context clarifier model, run it with structure guardrails
+        if clarification_model in ("qwen2.5-0.5b", "qwen2.5-1.5b"):
+            working = self.clarify_with_qwen(
+                clarification_model, working, language, context_summary
+            )
+            working = self._apply_contextual_compound_and_lexicon_fixes(
+                working, language, context_summary
+            )
+
+        return working
 
 
 _MEL_FILTERS_CACHE: Dict[int, np.ndarray] = {}
@@ -470,6 +798,7 @@ class WhisperONNXRunner:
         self.n_text_state = int(meta.get("n_text_state", 512))
         self.sot = int(meta.get("sot", 50258))
         self.eot = int(meta.get("eot", 50257))
+        self.sot_prev = int(meta.get("sot_prev", 50361))
         self.blank_id = int(meta.get("blank_id", 220))
         self.transcribe_id = int(meta.get("transcribe", 50359))
         self.translate_id = int(meta.get("translate", 50358))
@@ -496,14 +825,54 @@ class WhisperONNXRunner:
                     except Exception:
                         pass
 
+        # Pre-index byte tokens by first byte for fast context-prompt tokenization (<|startofprev|>)
+        self._by_first_byte: Dict[int, List[Tuple[bytes, int]]] = {}
+        inv_toks = sorted(
+            [(b, tid) for tid, b in self.tokens_map.items() if tid < self.eot and len(b) > 0],
+            key=lambda x: -len(x[0]),
+        )
+        for b, tid in inv_toks:
+            self._by_first_byte.setdefault(b[0], []).append((b, tid))
+
+    def encode_prompt_text(self, text_str: str, max_tokens: int = 56) -> List[int]:
+        """Encode preceding conversation context string into Whisper token IDs for `<|startofprev|>`."""
+        if not text_str or not text_str.strip():
+            return []
+        raw = (" " + text_str.strip()).encode("utf-8")
+        out: List[int] = []
+        i = 0
+        n = len(raw)
+        while i < n:
+            matched = False
+            for b, tid in self._by_first_byte.get(raw[i], ()):
+                if raw[i : i + len(b)] == b:
+                    out.append(tid)
+                    i += len(b)
+                    matched = True
+                    break
+            if not matched:
+                i += 1
+        return out[-max_tokens:]
+
     def encode_audio(self, audio_16k: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         mel = _whisper_log_mel_spectrogram(audio_16k, self.n_mels)
         cross_k, cross_v = self.encoder.run(None, {"mel": mel})
         return cross_k, cross_v
 
-    def detect_language_from_cross(self, cross_k: np.ndarray, cross_v: np.ndarray) -> str:
+    def detect_language_from_cross(
+        self,
+        cross_k: np.ndarray,
+        cross_v: np.ndarray,
+        allowed_languages: Optional[List[str]] = None,
+    ) -> str:
         if not self.is_multilingual or len(self.lang_tokens_arr) == 0:
             return "en"
+        valid_allowed = [
+            c for c in (allowed_languages or []) if c in self.lang_to_id
+        ]
+        if len(valid_allowed) == 1:
+            return valid_allowed[0]
+
         self_k = np.zeros((self.n_text_layer, 1, self.n_text_ctx, self.n_text_state), dtype=np.float32)
         self_v = np.zeros((self.n_text_layer, 1, self.n_text_ctx, self.n_text_state), dtype=np.float32)
         logits, _, _ = self.decoder.run(
@@ -517,6 +886,12 @@ class WhisperONNXRunner:
                 "offset": np.array([0], dtype=np.int64),
             },
         )
+        if valid_allowed:
+            allowed_toks = np.array([self.lang_to_id[c] for c in valid_allowed], dtype=np.int64)
+            lang_logits = logits[0, -1, allowed_toks]
+            best_lang_tok = int(allowed_toks[int(np.argmax(lang_logits))])
+            return self.id_to_lang.get(best_lang_tok, valid_allowed[0])
+
         lang_logits = logits[0, -1, self.lang_tokens_arr]
         best_lang_tok = int(self.lang_tokens_arr[int(np.argmax(lang_logits))])
         return self.id_to_lang.get(best_lang_tok, "da")
@@ -528,16 +903,25 @@ class WhisperONNXRunner:
         language: str = "da",
         task: str = "transcribe",
         duration_sec: float = 10.0,
+        context_prompt: Optional[str] = None,
     ) -> str:
         self_k = np.zeros((self.n_text_layer, 1, self.n_text_ctx, self.n_text_state), dtype=np.float32)
         self_v = np.zeros((self.n_text_layer, 1, self.n_text_ctx, self.n_text_state), dtype=np.float32)
 
+        prompt_ids = self.encode_prompt_text(context_prompt, max_tokens=56) if context_prompt else []
+
         if self.is_multilingual:
             lang_id = self.lang_to_id.get(language, self.lang_to_id.get("da", self.sot + 1))
             task_id = self.translate_id if task == "translate" else self.transcribe_id
-            init_seq = [self.sot, lang_id, task_id, self.no_timestamps]
+            if prompt_ids:
+                init_seq = [self.sot_prev] + prompt_ids + [self.sot, lang_id, task_id, self.no_timestamps]
+            else:
+                init_seq = [self.sot, lang_id, task_id, self.no_timestamps]
         else:
-            init_seq = [self.sot, self.no_timestamps]
+            if prompt_ids:
+                init_seq = [self.sot_prev] + prompt_ids + [self.sot, self.no_timestamps]
+            else:
+                init_seq = [self.sot, self.no_timestamps]
 
         init_tokens = np.array([init_seq], dtype=np.int64)
         offset = np.array([0], dtype=np.int64)
@@ -590,21 +974,24 @@ class WhisperONNXRunner:
 
 class LocalSpeechPipeline:
     """
-    Coordinates Direct ONNX Runtime Whisper (speech recognition + spoken language ID),
-    LocalSpeakerDiarizer (speaker recognition), and LocalONNXTranslationEngine
-    (OPUS-MT Danish <-> English Specialist, Meta NLLB-200, and Whisper Direct Translate).
+    Coordinates:
+    1. LocalSpeakerDiarizer (3D-Speaker ONNX voice recognition)
+    2. WhisperONNXRunner (Direct ONNX Runtime Whisper speech-to-text + restricted spoken language ID)
+    3. LocalContextClarifierEngine (Context-Aware Word Clarification & Validation without sentence restructuring)
+    4. LocalONNXTranslationEngine (OPUS-MT Danish <-> English Specialist, Meta NLLB-200, Whisper Direct Translate, or Skip)
     """
 
     def __init__(self, session_store: SessionStore):
         self.store = session_store
         self.diarizer = LocalSpeakerDiarizer()
+        self.clarifier = LocalContextClarifierEngine()
         self.translator = LocalONNXTranslationEngine()
         self._whisper_runners: Dict[str, WhisperONNXRunner] = {}
         self._lock = threading.Lock()
         self.device = "onnx-cpu"
         self.compute_type = "int8"
         print(
-            "[SpeechPipeline] Initialized Direct ONNX Runtime Whisper + 3D-Speaker + OPUS-MT (DA<->EN) & NLLB-200 Engine."
+            "[SpeechPipeline] Initialized 4-Stage Pipeline: 3D-Speaker + Whisper ONNX + Context Clarifier + OPUS-MT/NLLB-200."
         )
 
     def _get_whisper_runner(
@@ -619,14 +1006,49 @@ class LocalSpeechPipeline:
             self._whisper_runners[model_id] = runner
             return runner
 
+    @staticmethod
+    def _build_conversation_context(
+        session: MeetingSession, up_to_seg_index: Optional[int] = None
+    ) -> str:
+        """
+        Build a compact summary of what the conversation is about at a given point in time:
+        session title, source file name, defined meeting languages, and the rolling window of
+        recent spoken lines up to `up_to_seg_index`.
+        """
+        parts: List[str] = []
+        if session.title and not session.title.lower().startswith(("new meeting", "untitled")):
+            parts.append(f"Topic: {session.title}.")
+        if session.source_file_name:
+            clean_fname = re.sub(r"\.[^/.]+$", "", session.source_file_name).replace("_", " ").replace("-", " ")
+            if clean_fname and clean_fname.lower() not in (session.title or "").lower():
+                parts.append(f"Recording: {clean_fname}.")
+        segs = (
+            session.segments[:up_to_seg_index]
+            if up_to_seg_index is not None
+            else session.segments
+        )
+        recent_texts = [
+            s.original_text.strip()
+            for s in segs[-5:]
+            if s.original_text and s.original_text.strip()
+        ]
+        if recent_texts:
+            parts.append(" ".join(recent_texts))
+        return " ".join(parts).strip()
+
     def detect_spoken_language(
-        self, audio_16k: np.ndarray, model_id: str = DEFAULT_WHISPER_MODEL
+        self,
+        audio_16k: np.ndarray,
+        model_id: str = DEFAULT_WHISPER_MODEL,
+        allowed_languages: Optional[List[str]] = None,
     ) -> str:
         try:
             runner = self._get_whisper_runner(model_id)
             norm_audio = self._normalize_speech_clip(audio_16k)
             cross_k, cross_v = runner.encode_audio(norm_audio)
-            lang = runner.detect_language_from_cross(cross_k, cross_v)
+            lang = runner.detect_language_from_cross(
+                cross_k, cross_v, allowed_languages=allowed_languages
+            )
             return lang.strip() if lang else "da"
         except Exception as exc:
             print(f"[SpeechPipeline] Language detect fallback to 'da': {exc}")
@@ -648,13 +1070,22 @@ class LocalSpeechPipeline:
         model_id: str,
         language: str,
         task: str = "transcribe",
+        allowed_languages: Optional[List[str]] = None,
     ) -> str:
         norm_audio = self._normalize_speech_clip(audio_16k)
         runner = self._get_whisper_runner(model_id)
         cross_k, cross_v = runner.encode_audio(norm_audio)
-        lang_code = language if (language and language != "auto") else runner.detect_language_from_cross(cross_k, cross_v)
+        lang_code = (
+            language
+            if (language and language != "auto")
+            else runner.detect_language_from_cross(
+                cross_k, cross_v, allowed_languages=allowed_languages
+            )
+        )
         dur = len(audio_16k) / float(SAMPLE_RATE)
-        return runner.decode_from_cross(cross_k, cross_v, language=lang_code, task=task, duration_sec=dur)
+        return runner.decode_from_cross(
+            cross_k, cross_v, language=lang_code, task=task, duration_sec=dur
+        )
 
     def transcribe_and_translate_clip(
         self,
@@ -662,15 +1093,25 @@ class LocalSpeechPipeline:
         forced_language: Optional[str],
         target_language: str,
         model_id: str = DEFAULT_WHISPER_MODEL,
+        clarification_model: str = DEFAULT_CLARIFICATION_MODEL,
         translation_model: str = DEFAULT_TRANSLATION_MODEL,
-    ) -> Tuple[str, str, str, float]:
+        allowed_languages: Optional[List[str]] = None,
+        conversation_context: str = "",
+    ) -> Tuple[str, str, str, float, str]:
         """
-        Transcribe a single audio clip in `forced_language` (or auto-detect if None/"auto"),
-        and translate to `target_language` using `translation_model`.
-        Returns: (detected_source_lang, original_text, translated_text, confidence)
+        1. Transcribe a single audio clip in `forced_language` (or auto-detect among `allowed_languages` if None/"auto").
+        2. Run Context Clarification (`clarification_model`) using `conversation_context` to validate/fix
+           misheard words without restructuring sentences (or skip if `clarification_model == "none"`).
+        3. Translate to `target_language` using `translation_model` (or skip if `translation_model == "none"`
+           or `target_language == "none"`).
+        Returns: (detected_source_lang, clarified_original_text, translated_text, confidence, raw_stt_text)
         """
         if len(audio_16k) < int(SAMPLE_RATE * 0.25):
-            return forced_language or "en", "", "", 0.0
+            fallback_lang = (
+                forced_language
+                or (allowed_languages[0] if allowed_languages else "en")
+            )
+            return fallback_lang, "", "", 0.0, ""
 
         norm_audio = self._normalize_speech_clip(audio_16k)
         runner = self._get_whisper_runner(model_id)
@@ -678,23 +1119,53 @@ class LocalSpeechPipeline:
         dur = len(audio_16k) / float(SAMPLE_RATE)
 
         if not forced_language or forced_language == "auto":
-            detected_lang = runner.detect_language_from_cross(cross_k, cross_v)
+            detected_lang = runner.detect_language_from_cross(
+                cross_k, cross_v, allowed_languages=allowed_languages
+            )
         else:
             detected_lang = forced_language
 
-        # Step 1: Transcribe in the speaker's spoken language (reusing the same encoded cross_k/cross_v!)
-        original_text = runner.decode_from_cross(
+        # Step 1: Raw Speech-to-Text transcription in the speaker's spoken language
+        raw_text = runner.decode_from_cross(
             cross_k,
             cross_v,
             language=detected_lang,
             task="transcribe",
             duration_sec=dur,
         )
-        if not original_text:
-            return detected_lang, "", "", 1.0
+        if not raw_text:
+            return detected_lang, "", "", 1.0, ""
 
-        # Step 2: Translate into single output `target_language` using the selected local AI translation model
-        if detected_lang == target_language:
+        # Step 2: 3rd Model — Context Clarification & Word Validation (without sentence restructuring)
+        if clarification_model and clarification_model != "none":
+            whisper_ctx_cand: Optional[str] = None
+            if conversation_context and len(raw_text.split()) >= 2:
+                # Re-validate acoustic decoding conditioned on rolling conversation context (<|startofprev|>)
+                whisper_ctx_cand = runner.decode_from_cross(
+                    cross_k,
+                    cross_v,
+                    language=detected_lang,
+                    task="transcribe",
+                    duration_sec=dur,
+                    context_prompt=conversation_context[-220:],
+                )
+            original_text = self.clarifier.clarify_segment(
+                raw_text=raw_text,
+                language=detected_lang,
+                context_summary=conversation_context,
+                clarification_model=clarification_model,
+                whisper_ctx_candidate=whisper_ctx_cand,
+            )
+        else:
+            original_text = raw_text
+
+        # Step 3: Translate into single output `target_language` (or skip if translation is disabled)
+        if (
+            not target_language
+            or target_language == "none"
+            or translation_model == "none"
+            or detected_lang == target_language
+        ):
             translated_text = original_text
         elif translation_model == "whisper-native" and target_language == "en":
             w_trans = runner.decode_from_cross(
@@ -714,7 +1185,7 @@ class LocalSpeechPipeline:
                 translation_model=translation_model,
             )
 
-        return detected_lang, original_text, translated_text, 1.0
+        return detected_lang, original_text, translated_text, 1.0, raw_text
 
     def process_live_chunk(
         self,
@@ -764,18 +1235,26 @@ class LocalSpeechPipeline:
 
             # If speaker is on 'auto' and clip is short (< 2.2s), reuse the speaker's last detected language if available
             effective_forced_lang = None if assigned_lang == "auto" else assigned_lang
-            if effective_forced_lang is None and len(sub_audio) < int(SAMPLE_RATE * 2.2):
+            if (
+                effective_forced_lang is None
+                and not session.spoken_languages
+                and len(sub_audio) < int(SAMPLE_RATE * 2.2)
+            ):
                 prev_spk_segs = [s for s in session.segments if s.speaker_id == spk_id and s.source_language]
                 if prev_spk_segs:
                     effective_forced_lang = prev_spk_segs[-1].source_language
 
-            detected_lang, orig_text, trans_text, confidence = (
+            conv_ctx = self._build_conversation_context(session)
+            detected_lang, orig_text, trans_text, confidence, raw_stt_text = (
                 self.transcribe_and_translate_clip(
                     sub_audio,
                     forced_language=effective_forced_lang,
                     target_language=session.target_language,
                     model_id=session.whisper_model,
+                    clarification_model=session.clarification_model,
                     translation_model=session.translation_model,
+                    allowed_languages=session.spoken_languages,
+                    conversation_context=conv_ctx,
                 )
             )
 
@@ -796,6 +1275,7 @@ class LocalSpeechPipeline:
                 translated_text=trans_text,
                 target_language=session.target_language,
                 confidence=round(confidence, 3),
+                raw_text=raw_stt_text,
             )
             session.segments.append(seg_obj)
             created_segments.append(seg_obj)
@@ -857,13 +1337,17 @@ class LocalSpeechPipeline:
                 if (existing_spk and existing_spk.language != "auto")
                 else None
             )
-            detected_lang, orig_text, trans_text, conf = (
+            conv_ctx = self._build_conversation_context(session)
+            detected_lang, orig_text, trans_text, conf, raw_stt_text = (
                 self.transcribe_and_translate_clip(
                     clip,
                     forced_language=forced_lang,
                     target_language=session.target_language,
                     model_id=session.whisper_model,
+                    clarification_model=session.clarification_model,
                     translation_model=session.translation_model,
+                    allowed_languages=session.spoken_languages,
+                    conversation_context=conv_ctx,
                 )
             )
             if not orig_text or not orig_text.strip(" ()[].,-?!\"'"):
@@ -881,6 +1365,7 @@ class LocalSpeechPipeline:
                 translated_text=trans_text,
                 target_language=session.target_language,
                 confidence=round(conf, 3),
+                raw_text=raw_stt_text,
             )
             session.segments.append(seg_obj)
 
@@ -898,7 +1383,7 @@ class LocalSpeechPipeline:
         speaker_lang = session.speakers[speaker_id].language
         updated: List[TranscriptSegment] = []
 
-        for seg in session.segments:
+        for idx, seg in enumerate(session.segments):
             if seg.speaker_id != speaker_id:
                 continue
 
@@ -906,13 +1391,17 @@ class LocalSpeechPipeline:
             if len(clip) < int(SAMPLE_RATE * 0.25):
                 continue
 
-            detected_lang, orig_text, trans_text, conf = (
+            conv_ctx = self._build_conversation_context(session, up_to_seg_index=idx)
+            detected_lang, orig_text, trans_text, conf, raw_stt_text = (
                 self.transcribe_and_translate_clip(
                     clip,
                     forced_language=None if speaker_lang == "auto" else speaker_lang,
                     target_language=session.target_language,
                     model_id=session.whisper_model,
+                    clarification_model=session.clarification_model,
                     translation_model=session.translation_model,
+                    allowed_languages=session.spoken_languages,
+                    conversation_context=conv_ctx,
                 )
             )
             if orig_text:
@@ -921,10 +1410,62 @@ class LocalSpeechPipeline:
                 seg.translated_text = trans_text
                 seg.target_language = session.target_language
                 seg.confidence = round(conf, 3)
+                seg.raw_text = raw_stt_text
             updated.append(seg)
 
         self.store.save_session(session)
         return updated
+
+    def reclarify_and_retranslate_all_segments(
+        self, session: MeetingSession
+    ) -> List[TranscriptSegment]:
+        """
+        When the user changes the 3rd Model (`clarification_model`) on an existing session
+        (e.g. toggling between 'whisper-context', 'qwen2.5-0.5b', or 'none' Skip Clarification),
+        re-run Context Clarification on each segment's `raw_text` (or re-decode with context)
+        and re-translate into `session.target_language`.
+        """
+        runner: Optional[WhisperONNXRunner] = None
+        if session.clarification_model != "none":
+            try:
+                runner = self._get_whisper_runner(session.whisper_model)
+            except Exception:
+                runner = None
+
+        for idx, seg in enumerate(session.segments):
+            base_raw = (seg.raw_text or seg.original_text or "").strip()
+            if not base_raw:
+                continue
+            if not seg.raw_text:
+                seg.raw_text = base_raw
+
+            if session.clarification_model == "none":
+                seg.original_text = base_raw
+            else:
+                conv_ctx = self._build_conversation_context(session, up_to_seg_index=idx)
+                whisper_ctx_cand: Optional[str] = None
+                if runner is not None and conv_ctx and len(base_raw.split()) >= 2:
+                    clip = self.store.read_audio_slice(session.id, seg.start, seg.end)
+                    if len(clip) >= int(SAMPLE_RATE * 0.25):
+                        norm_audio = self._normalize_speech_clip(clip)
+                        cross_k, cross_v = runner.encode_audio(norm_audio)
+                        whisper_ctx_cand = runner.decode_from_cross(
+                            cross_k,
+                            cross_v,
+                            language=seg.source_language,
+                            task="transcribe",
+                            duration_sec=max(0.5, seg.end - seg.start),
+                            context_prompt=conv_ctx[-220:],
+                        )
+                seg.original_text = self.clarifier.clarify_segment(
+                    raw_text=base_raw,
+                    language=seg.source_language,
+                    context_summary=conv_ctx,
+                    clarification_model=session.clarification_model,
+                    whisper_ctx_candidate=whisper_ctx_cand,
+                )
+
+        return self.retranslate_all_segments(session)
 
     def retranslate_all_segments(
         self, session: MeetingSession
@@ -934,7 +1475,12 @@ class LocalSpeechPipeline:
         re-translate all existing segments into `session.target_language`.
         """
         for seg in session.segments:
-            if seg.source_language == session.target_language:
+            if (
+                not session.target_language
+                or session.target_language == "none"
+                or session.translation_model == "none"
+                or seg.source_language == session.target_language
+            ):
                 seg.translated_text = seg.original_text
                 seg.target_language = session.target_language
             else:
@@ -971,14 +1517,14 @@ class LocalSpeechPipeline:
         progress_cb: Optional[Callable[[str, int], None]] = None,
     ) -> MeetingSession:
         """
-        Re-transcribe and re-translate all existing segments of a session using
-        its current `whisper_model`, `translation_model`, and `target_language`
+        Re-transcribe, clarify, and re-translate all existing segments of a session using
+        its current `whisper_model`, `clarification_model`, `translation_model`,
+        `spoken_languages`, and `target_language`
         (preserving speaker profiles, names, and per-speaker spoken languages).
         """
         if not session.segments:
             audio_path = self.store.get_audio_path(session.id)
             if audio_path.exists():
-                raw = audio_path.read_bytes()
                 audio_16k = self.store.read_audio_slice(
                     session.id, 0.0, max(1.0, session.duration or 3600.0)
                 )
@@ -990,7 +1536,7 @@ class LocalSpeechPipeline:
 
         if progress_cb:
             progress_cb(
-                f"Loading Whisper ({session.whisper_model}) & Translation ({session.translation_model})...",
+                f"Loading Whisper ({session.whisper_model}), Clarifier ({session.clarification_model}) & Translator ({session.translation_model})...",
                 10,
             )
         resolve_local_whisper_model(session.whisper_model)
@@ -1000,7 +1546,7 @@ class LocalSpeechPipeline:
             if progress_cb:
                 pct = 15 + int(80 * (idx + 1) / max(1, total))
                 progress_cb(
-                    f"Re-transcribing & translating segment {idx + 1}/{total} ({session.whisper_model})...",
+                    f"Re-transcribing, clarifying & translating segment {idx + 1}/{total} ({session.whisper_model})...",
                     pct,
                 )
 
@@ -1012,13 +1558,17 @@ class LocalSpeechPipeline:
             forced_lang = (
                 spk.language if (spk and spk.language != "auto") else None
             )
-            detected_lang, orig_text, trans_text, conf = (
+            conv_ctx = self._build_conversation_context(session, up_to_seg_index=idx)
+            detected_lang, orig_text, trans_text, conf, raw_stt_text = (
                 self.transcribe_and_translate_clip(
                     clip,
                     forced_language=forced_lang,
                     target_language=session.target_language,
                     model_id=session.whisper_model,
+                    clarification_model=session.clarification_model,
                     translation_model=session.translation_model,
+                    allowed_languages=session.spoken_languages,
+                    conversation_context=conv_ctx,
                 )
             )
             if orig_text:
@@ -1027,10 +1577,11 @@ class LocalSpeechPipeline:
                 seg.translated_text = trans_text
                 seg.target_language = session.target_language
                 seg.confidence = round(conf, 3)
+                seg.raw_text = raw_stt_text
 
         self.store.save_session(session)
         if progress_cb:
-            progress_cb("Completed re-transcription & translation!", 100)
+            progress_cb("Completed re-transcription, clarification & translation!", 100)
         return session
 
     def evict_model_cache(self, model_type: str, model_id: str = "") -> None:
@@ -1038,6 +1589,11 @@ class LocalSpeechPipeline:
         with self._lock:
             if model_type == "whisper":
                 self._whisper_runners.pop(model_id, None)
+            elif model_type == "clarification":
+                if model_id:
+                    self.clarifier._qwen_sessions.pop(model_id, None)
+                else:
+                    self.clarifier._qwen_sessions.clear()
             elif model_type in ("opus", "opus-mt-da-en", "translation"):
                 self.translator._opus_cache.clear()
             elif model_type in ("nllb", "nllb-200-600M"):

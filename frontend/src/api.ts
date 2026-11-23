@@ -40,12 +40,14 @@ export async function triggerModelDownload(
   modelType:
     | 'whisper'
     | 'speaker'
+    | 'clarification'
     | 'opus'
     | 'nllb'
     | 'all_recommended'
     | 'onboarding',
   whisperId?: string,
-  translationId?: string
+  translationId?: string,
+  clarificationId?: string
 ): Promise<void> {
   const res = await fetch(`${API_BASE}/api/models/download`, {
     method: 'POST',
@@ -53,6 +55,7 @@ export async function triggerModelDownload(
     body: JSON.stringify({
       model_type: modelType,
       whisper_id: whisperId,
+      clarification_id: clarificationId,
       translation_id: translationId,
     }),
   });
@@ -60,7 +63,13 @@ export async function triggerModelDownload(
 }
 
 export async function deleteLocalModel(
-  modelType: 'whisper' | 'speaker' | 'opus' | 'nllb' | 'translation',
+  modelType:
+    | 'whisper'
+    | 'speaker'
+    | 'clarification'
+    | 'opus'
+    | 'nllb'
+    | 'translation',
   modelId?: string
 ): Promise<ModelsStatus> {
   const res = await fetch(`${API_BASE}/api/models/delete`, {
@@ -101,7 +110,9 @@ export async function createSession(
   targetLanguage: string,
   whisperModel: string,
   translationModel: string = 'opus-mt-da-en',
-  sessionType: 'file' | 'live' = 'file'
+  sessionType: 'file' | 'live' = 'file',
+  clarificationModel: string = 'whisper-context',
+  spokenLanguages: string[] = []
 ): Promise<MeetingSession> {
   const res = await fetch(`${API_BASE}/api/sessions`, {
     method: 'POST',
@@ -111,7 +122,9 @@ export async function createSession(
       session_type: sessionType,
       target_language: targetLanguage,
       whisper_model: whisperModel,
+      clarification_model: clarificationModel,
       translation_model: translationModel,
+      spoken_languages: spokenLanguages,
     }),
   });
   if (!res.ok) throw new Error('Failed to create session');
@@ -134,7 +147,9 @@ export async function updateSession(
     title?: string;
     target_language?: string;
     whisper_model?: string;
+    clarification_model?: string;
     translation_model?: string;
+    spoken_languages?: string[];
     retranslate_existing?: boolean;
     retranscribe_existing?: boolean;
   }

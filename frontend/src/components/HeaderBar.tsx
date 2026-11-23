@@ -5,9 +5,11 @@ import {
   Languages,
   Settings,
   Shield,
+  Sparkles,
 } from 'lucide-react';
 import { useI18n } from '../i18n';
 import {
+  ClarificationModelInfo,
   MeetingSession,
   ModelsStatus,
   SupportedLanguage,
@@ -20,12 +22,14 @@ interface HeaderBarProps {
   session: MeetingSession | null;
   languages: SupportedLanguage[];
   whisperModels: WhisperModelInfo[];
+  clarificationModels?: ClarificationModelInfo[];
   translationModels: TranslationModelInfo[];
   device: string;
   computeType: string;
   modelsStatus: ModelsStatus | null;
   onChangeTargetLanguage: (langCode: string) => void;
   onChangeWhisperModel: (modelId: string) => void;
+  onChangeClarificationModel?: (modelId: string) => void;
   onChangeTranslationModel: (modelId: string) => void;
   onOpenSettingsModal: (initialTab?: SettingsTab) => void;
 }
@@ -34,11 +38,13 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
   session,
   languages,
   whisperModels,
+  clarificationModels = [],
   translationModels,
   device,
   modelsStatus,
   onChangeTargetLanguage,
   onChangeWhisperModel,
+  onChangeClarificationModel,
   onChangeTranslationModel,
   onOpenSettingsModal,
 }) => {
@@ -48,6 +54,10 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
   const downloadedWhisperModels =
     modelsStatus?.whisper_models.filter((w) => w.downloaded) ||
     whisperModels.filter((w) => w.downloaded);
+
+  const downloadedClarificationModels =
+    modelsStatus?.clarification_models?.filter((cm) => cm.downloaded) ||
+    clarificationModels.filter((cm) => cm.downloaded);
 
   const downloadedTranslationModels =
     modelsStatus?.translation_models.filter((tm) => tm.downloaded) ||
@@ -120,7 +130,58 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
               </div>
             </div>
 
-            {/* 2. Local Translation AI Model Selector (Only Downloaded Models) */}
+            {/* 2. Local Context Word Clarification Model Selector (3rd Model) */}
+            {onChangeClarificationModel && (
+              <div className="flex items-center gap-2 bg-slate-800/75 border border-amber-500/30 rounded-xl px-3 py-1.5">
+                <Sparkles className="w-4 h-4 text-amber-400 shrink-0" />
+                <div className="flex flex-col">
+                  <span className="text-[10px] uppercase tracking-wider text-amber-300 font-semibold leading-none">
+                    {t('contextClarifierModel')}
+                  </span>
+                  <select
+                    value={session.clarification_model || 'whisper-context'}
+                    onChange={(e) => {
+                      if (e.target.value === '__open_models__') {
+                        onOpenSettingsModal('models');
+                      } else {
+                        onChangeClarificationModel(e.target.value);
+                      }
+                    }}
+                    className="bg-transparent text-slate-100 text-xs font-medium focus:outline-none cursor-pointer mt-0.5 max-w-[185px] truncate"
+                  >
+                    {(downloadedClarificationModels.length > 0
+                      ? downloadedClarificationModels
+                      : [
+                          {
+                            id: 'whisper-context',
+                            name: 'Whisper Contextual Validator',
+                          },
+                          {
+                            id: 'none',
+                            name: 'Skip Clarification',
+                          },
+                        ]
+                    ).map((cm) => (
+                      <option
+                        key={cm.id}
+                        value={cm.id}
+                        className="bg-slate-900 text-slate-100"
+                      >
+                        {cm.name}
+                      </option>
+                    ))}
+                    <option
+                      value="__open_models__"
+                      className="bg-slate-900 text-amber-400 font-semibold"
+                    >
+                      {t('downloadMoreModels')}
+                    </option>
+                  </select>
+                </div>
+              </div>
+            )}
+
+            {/* 3. Local Translation AI Model Selector (Only Downloaded Models) */}
             <div className="flex items-center gap-2 bg-slate-800/80 border border-emerald-500/30 rounded-xl px-3 py-1.5">
               <Languages className="w-4 h-4 text-emerald-400 shrink-0" />
               <div className="flex flex-col">

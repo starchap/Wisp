@@ -13,6 +13,16 @@ export interface WhisperModelInfo {
   local_path?: string;
 }
 
+export interface ClarificationModelInfo {
+  id: string;
+  name: string;
+  description: string;
+  size_mb: string;
+  type: string;
+  downloaded?: boolean;
+  local_path?: string;
+}
+
 export interface TranslationModelInfo {
   id: string;
   name: string;
@@ -36,6 +46,7 @@ export interface ModelsStatus {
   sessions_directory?: string;
   needs_onboarding?: boolean;
   whisper_models: WhisperModelInfo[];
+  clarification_models?: ClarificationModelInfo[];
   translation_models: TranslationModelInfo[];
   speaker_diarization: {
     id: string;
@@ -73,6 +84,7 @@ export interface TranscriptSegment {
   target_language: string;
   confidence: number;
   is_reprocessing?: boolean;
+  raw_text?: string;
 }
 
 export interface MeetingSession {
@@ -84,7 +96,9 @@ export interface MeetingSession {
   source_file_name?: string;
   target_language: string;
   whisper_model: string;
+  clarification_model?: string;
   translation_model: string;
+  spoken_languages?: string[];
   duration: number;
   audio_filename: string;
   speakers: Record<string, SpeakerProfile>;
@@ -100,7 +114,9 @@ export interface SessionSummary {
   source_file_name?: string;
   target_language: string;
   whisper_model?: string;
+  clarification_model?: string;
   translation_model?: string;
+  spoken_languages?: string[];
   duration: number;
   speaker_count: number;
   segment_count: number;
@@ -119,6 +135,8 @@ export interface AppConfig {
   languages: SupportedLanguage[];
   whisper_models: WhisperModelInfo[];
   default_whisper_model: string;
+  clarification_models?: ClarificationModelInfo[];
+  default_clarification_model?: string;
   translation_models: TranslationModelInfo[];
   default_translation_model: string;
   device: string;

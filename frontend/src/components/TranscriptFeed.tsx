@@ -162,6 +162,15 @@ export const TranscriptFeed: React.FC<TranscriptFeedProps> = ({
             </span>
           )}
 
+          {session.spoken_languages && session.spoken_languages.length > 0 && (
+            <span
+              className="px-2 py-0.5 rounded-md bg-amber-500/15 border border-amber-500/35 text-[10px] font-bold text-amber-300"
+              title="Defined Meeting Spoken Languages"
+            >
+              {session.spoken_languages.map((c) => c.toUpperCase()).join(' + ')}
+            </span>
+          )}
+
           {(session.duration > 0 || session.segments.length > 0) && (
             <div className="flex items-center gap-1.5">
               <button

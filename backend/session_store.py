@@ -18,6 +18,7 @@ import soundfile as sf
 
 import config
 from config import (
+    DEFAULT_CLARIFICATION_MODEL,
     DEFAULT_TRANSLATION_MODEL,
     DEFAULT_WHISPER_MODEL,
     SPEAKER_COLORS,
@@ -43,11 +44,12 @@ class TranscriptSegment:
     start: float                 # Seconds from start of session audio
     end: float                   # Seconds from start of session audio
     source_language: str         # Detected or forced language code ("da", "es", "en", etc.)
-    original_text: str           # Text in speaker's language
+    original_text: str           # Text in speaker's language (after Context Clarification if enabled)
     translated_text: str         # Text translated into session's target_language
     target_language: str         # Target output language when translated
     confidence: float = 1.0
     is_reprocessing: bool = False
+    raw_text: str = ""           # Raw first-pass Whisper text before Context Clarification
 
 
 @dataclass
@@ -58,9 +60,11 @@ class MeetingSession:
     updated_at: float
     session_type: str = "file"   # "file" or "live"
     source_file_name: str = ""
-    target_language: str = "en"  # Single output language for the meeting
+    target_language: str = "en"  # Single output language for the meeting (or "none" to skip translation)
     whisper_model: str = DEFAULT_WHISPER_MODEL
+    clarification_model: str = DEFAULT_CLARIFICATION_MODEL
     translation_model: str = DEFAULT_TRANSLATION_MODEL
+    spoken_languages: List[str] = field(default_factory=list)  # Expected languages in meeting, e.g. ["da", "en"]
     duration: float = 0.0
     audio_filename: str = "recording.wav"
     speakers: Dict[str, SpeakerProfile] = field(default_factory=dict)
@@ -77,7 +81,9 @@ class MeetingSession:
             "source_file_name": self.source_file_name,
             "target_language": self.target_language,
             "whisper_model": self.whisper_model,
+            "clarification_model": self.clarification_model,
             "translation_model": self.translation_model,
+            "spoken_languages": list(self.spoken_languages),
             "duration": round(self.duration, 2),
             "audio_filename": self.audio_filename,
             "speakers": {k: asdict(v) for k, v in self.speakers.items()},
@@ -206,7 +212,14 @@ class SessionStore:
                         k: SpeakerProfile(**v) for k, v in data.get("speakers", {}).items()
                     }
                     segments = [
-                        TranscriptSegment(**s) for s in data.get("segments", [])
+                        TranscriptSegment(
+                            **{
+                                k: v
+                                for k, v in s.items()
+                                if k in TranscriptSegment.__dataclass_fields__
+                            }
+                        )
+                        for s in data.get("segments", [])
                     ]
                     session = MeetingSession(
                         id=data["id"],
@@ -217,7 +230,17 @@ class SessionStore:
                         source_file_name=data.get("source_file_name", ""),
                         target_language=data.get("target_language", "en"),
                         whisper_model=data.get("whisper_model", DEFAULT_WHISPER_MODEL),
-                        translation_model=data.get("translation_model", DEFAULT_TRANSLATION_MODEL),
+                        clarification_model=data.get(
+                            "clarification_model", DEFAULT_CLARIFICATION_MODEL
+                        ),
+                        translation_model=data.get(
+                            "translation_model", DEFAULT_TRANSLATION_MODEL
+                        ),
+                        spoken_languages=[
+                            c
+                            for c in data.get("spoken_languages", [])
+                            if c and c not in ("auto", "none")
+                        ],
                         duration=data.get("duration", 0.0),
                         audio_filename=data.get("audio_filename", "recording.wav"),
                         speakers=speakers,
@@ -263,10 +286,15 @@ class SessionStore:
         session_type: str = "file",
         target_language: str = "en",
         whisper_model: str = DEFAULT_WHISPER_MODEL,
+        clarification_model: str = DEFAULT_CLARIFICATION_MODEL,
         translation_model: str = DEFAULT_TRANSLATION_MODEL,
+        spoken_languages: Optional[List[str]] = None,
     ) -> MeetingSession:
         session_id = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
         now = time.time()
+        clean_spoken = [
+            c for c in (spoken_languages or []) if c and c not in ("auto", "none")
+        ]
         session = MeetingSession(
             id=session_id,
             title=title,
@@ -275,7 +303,9 @@ class SessionStore:
             session_type=session_type if session_type in ("file", "live") else "file",
             target_language=target_language,
             whisper_model=whisper_model,
-            translation_model=translation_model,
+            clarification_model=clarification_model or DEFAULT_CLARIFICATION_MODEL,
+            translation_model=translation_model or DEFAULT_TRANSLATION_MODEL,
+            spoken_languages=clean_spoken,
         )
         audio_path = self.get_audio_path(session_id)
         with wave.open(str(audio_path), "wb") as wf:
@@ -305,7 +335,9 @@ class SessionStore:
                 "source_file_name": s.source_file_name,
                 "target_language": s.target_language,
                 "whisper_model": s.whisper_model,
+                "clarification_model": s.clarification_model,
                 "translation_model": s.translation_model,
+                "spoken_languages": list(s.spoken_languages),
                 "duration": round(s.duration, 2),
                 "speaker_count": len(s.speakers),
                 "segment_count": len(s.segments),

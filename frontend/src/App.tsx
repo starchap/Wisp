@@ -161,8 +161,10 @@ export function App() {
     initialSessionType?: 'file' | 'live';
     currentSourceFileName?: string;
     initialWhisperModel?: string;
+    initialClarificationModel?: string;
     initialTranslationModel?: string;
     initialTargetLanguage?: string;
+    initialSpokenLanguages?: string[];
     hasExistingAudio?: boolean;
   }>({
     isOpen: false,
@@ -325,12 +327,17 @@ export function App() {
       currentSourceFileName: '',
       initialWhisperModel:
         activeSession?.whisper_model || config?.default_whisper_model || 'small',
+      initialClarificationModel:
+        activeSession?.clarification_model ||
+        config?.default_clarification_model ||
+        'whisper-context',
       initialTranslationModel:
         activeSession?.translation_model ||
         config?.default_translation_model ||
         'opus-mt-da-en',
       initialTargetLanguage:
         defaultOutputLang || activeSession?.target_language || 'en',
+      initialSpokenLanguages: activeSession?.spoken_languages || ['da', 'en'],
       hasExistingAudio: false,
     });
   };
@@ -352,6 +359,11 @@ export function App() {
         s.whisper_model ||
         config?.default_whisper_model ||
         'small',
+      initialClarificationModel:
+        full?.clarification_model ||
+        s.clarification_model ||
+        config?.default_clarification_model ||
+        'whisper-context',
       initialTranslationModel:
         full?.translation_model ||
         s.translation_model ||
@@ -359,6 +371,8 @@ export function App() {
         'opus-mt-da-en',
       initialTargetLanguage:
         full?.target_language || s.target_language || defaultOutputLang || 'en',
+      initialSpokenLanguages:
+        full?.spoken_languages || s.spoken_languages || [],
       hasExistingAudio:
         (full ? full.segments.length > 0 || full.duration > 0 : false) ||
         ('segment_count' in s && (s.segment_count > 0 || s.duration > 0)),
@@ -371,8 +385,10 @@ export function App() {
     file: File | null;
     expectedSpeakers?: number;
     whisperModel: string;
+    clarificationModel: string;
     translationModel: string;
     targetLanguage: string;
+    spokenLanguages: string[];
     retranscribe?: boolean;
   }) => {
     if (sessionDialog.mode === 'create') {
@@ -390,7 +406,9 @@ export function App() {
           activeSession?.translation_model ||
           config?.default_translation_model ||
           'opus-mt-da-en',
-        params.sessionType
+        params.sessionType,
+        params.clarificationModel || 'whisper-context',
+        params.spokenLanguages || []
       );
       setActiveSession(created);
       setSessionsList(await fetchSessions());
@@ -417,7 +435,7 @@ export function App() {
       const shouldRetranscribe = !params.file && !!params.retranscribe;
       if (shouldRetranscribe) {
         setUploadProgress({
-          message: `Re-transcribing & translating with ${params.whisperModel}...`,
+          message: `Re-transcribing, clarifying & translating with ${params.whisperModel}...`,
           percent: 8,
         });
       }
@@ -425,7 +443,9 @@ export function App() {
         title: params.title,
         target_language: params.targetLanguage,
         whisper_model: params.whisperModel,
+        clarification_model: params.clarificationModel,
         translation_model: params.translationModel,
+        spoken_languages: params.spokenLanguages,
         retranscribe_existing: shouldRetranscribe,
       });
       setActiveSession(updated);
@@ -523,6 +543,7 @@ export function App() {
           session={activeSession}
           languages={config?.languages || []}
           whisperModels={config?.whisper_models || []}
+          clarificationModels={config?.clarification_models || []}
           translationModels={config?.translation_models || []}
           device={config?.device || 'cpu'}
           computeType={config?.compute_type || 'int8'}
@@ -531,6 +552,12 @@ export function App() {
             if (!activeSession) return;
             const updated = await updateSession(activeSession.id, {
               target_language: langCode,
+              translation_model:
+                langCode === 'none'
+                  ? 'none'
+                  : activeSession.translation_model === 'none'
+                  ? 'opus-mt-da-en'
+                  : activeSession.translation_model,
               retranslate_existing: true,
             });
             setActiveSession(updated);
@@ -542,7 +569,7 @@ export function App() {
               activeSession.whisper_model !== modelId
             ) {
               setUploadProgress({
-                message: `Re-transcribing & translating with ${modelId}...`,
+                message: `Re-transcribing, clarifying & translating with ${modelId}...`,
                 percent: 8,
               });
             }
@@ -551,10 +578,24 @@ export function App() {
             });
             setActiveSession(updated);
           }}
+          onChangeClarificationModel={async (modelId) => {
+            if (!activeSession) return;
+            const updated = await updateSession(activeSession.id, {
+              clarification_model: modelId,
+              retranslate_existing: true,
+            });
+            setActiveSession(updated);
+          }}
           onChangeTranslationModel={async (modelId) => {
             if (!activeSession) return;
             const updated = await updateSession(activeSession.id, {
               translation_model: modelId,
+              target_language:
+                modelId === 'none'
+                  ? 'none'
+                  : activeSession.target_language === 'none'
+                  ? defaultOutputLang || 'en'
+                  : activeSession.target_language,
               retranslate_existing: true,
             });
             setActiveSession(updated);
@@ -831,8 +872,10 @@ export function App() {
         modelsStatus={modelsStatus}
         languages={config?.languages || []}
         initialWhisperModel={sessionDialog.initialWhisperModel}
+        initialClarificationModel={sessionDialog.initialClarificationModel}
         initialTranslationModel={sessionDialog.initialTranslationModel}
         initialTargetLanguage={sessionDialog.initialTargetLanguage}
+        initialSpokenLanguages={sessionDialog.initialSpokenLanguages}
         hasExistingAudio={sessionDialog.hasExistingAudio}
         onSave={handleSaveSessionDialog}
         onClose={() =>
@@ -865,6 +908,7 @@ export function App() {
         onChangeLoopback={setSelectedLoopback}
         onChangeMic={setSelectedMic}
         activeWhisperModel={activeSession?.whisper_model}
+        activeClarificationModel={activeSession?.clarification_model}
         activeTranslationModel={activeSession?.translation_model}
         progressText={modelProgressText}
         isBusy={isModelBusy}
@@ -875,10 +919,24 @@ export function App() {
           });
           setActiveSession(updated);
         }}
+        onSelectClarificationModel={async (modelId) => {
+          if (!activeSession) return;
+          const updated = await updateSession(activeSession.id, {
+            clarification_model: modelId,
+            retranslate_existing: true,
+          });
+          setActiveSession(updated);
+        }}
         onSelectTranslationModel={async (modelId) => {
           if (!activeSession) return;
           const updated = await updateSession(activeSession.id, {
             translation_model: modelId,
+            target_language:
+              modelId === 'none'
+                ? 'none'
+                : activeSession.target_language === 'none'
+                ? defaultOutputLang || 'en'
+                : activeSession.target_language,
             retranslate_existing: true,
           });
           setActiveSession(updated);
@@ -901,10 +959,11 @@ export function App() {
             setActiveSession(await fetchSession(list[0].id));
           }
         }}
-        onComplete={async (whisperId, translationId) => {
+        onComplete={async (whisperId, translationId, clarificationId) => {
           if (activeSession) {
             const updated = await updateSession(activeSession.id, {
               whisper_model: whisperId,
+              clarification_model: clarificationId || 'whisper-context',
               translation_model: translationId,
             });
             setActiveSession(updated);

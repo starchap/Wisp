@@ -122,6 +122,53 @@ WHISPER_MODELS: List[Dict[str, str]] = [
 
 DEFAULT_WHISPER_MODEL = "small"
 
+# Selectable 3rd Model Stage: Local AI Context Clarification & Word Validation Models
+# Runs AFTER Speech-to-Text (Whisper) and BEFORE Translation to analyze what the conversation
+# is about and validate/correct misheard words in each segment based on rolling context —
+# without restructuring sentences.
+CLARIFICATION_MODELS: List[Dict[str, str]] = [
+    {
+        "id": "whisper-context",
+        "name": "Whisper Contextual Acoustic Validator (0 MB extra) — Recommended",
+        "description": "Validates and corrects misheard words using rolling conversation context (<|startofprev|>), topic keywords, and meeting spoken languages without restructuring sentences.",
+        "size_mb": "0",
+        "type": "acoustic-context",
+    },
+    {
+        "id": "qwen2.5-0.5b",
+        "name": "Qwen 2.5 0.5B Context Clarifier (ONNX Q4, ~755 MB)",
+        "description": "Local instruction-tuned causal LLM that validates phonetically misheard words against conversation context with strict sentence-structure preservation.",
+        "size_mb": "755",
+        "type": "qwen-onnx",
+        "hf_repo": "onnx-community/Qwen2.5-0.5B-Instruct",
+        "onnx_file": "onnx/model_q4.onnx",
+        "num_layers": "24",
+        "num_kv_heads": "2",
+        "head_dim": "64",
+    },
+    {
+        "id": "qwen2.5-1.5b",
+        "name": "Qwen 2.5 1.5B Deep Context Clarifier (ONNX Q4, ~1.7 GB)",
+        "description": "Larger 1.5B multilingual context validator for deeper domain & Danish/English compound word correction without altering sentence structure.",
+        "size_mb": "1705",
+        "type": "qwen-onnx",
+        "hf_repo": "onnx-community/Qwen2.5-1.5B-Instruct",
+        "onnx_file": "onnx/model_q4.onnx",
+        "num_layers": "28",
+        "num_kv_heads": "2",
+        "head_dim": "128",
+    },
+    {
+        "id": "none",
+        "name": "Skip Clarification (Raw Speech-to-Text Output — 0 MB)",
+        "description": "Bypasses contextual word clarification and uses the raw first-pass Speech-to-Text transcription directly.",
+        "size_mb": "0",
+        "type": "none",
+    },
+]
+
+DEFAULT_CLARIFICATION_MODEL = "whisper-context"
+
 # Selectable Local AI Translation Models (Focused on Danish <-> English + Spanish/German/Multilingual)
 TRANSLATION_MODELS: List[Dict[str, str]] = [
     {
@@ -144,6 +191,13 @@ TRANSLATION_MODELS: List[Dict[str, str]] = [
         "description": "Uses Whisper's built-in acoustic translation head to translate speech directly into English.",
         "size_mb": "0",
         "type": "whisper",
+    },
+    {
+        "id": "none",
+        "name": "Skip Translation — Transcription Only (0 MB)",
+        "description": "Disables translation completely and keeps the transcript in each speaker's original spoken language.",
+        "size_mb": "0",
+        "type": "none",
     },
 ]
 
@@ -179,6 +233,7 @@ SPEAKER_EMBEDDING_MODEL_PATH = (
 # Comprehensive mapping of Whisper language codes -> Display Names and NLLB-200 FLORES-200 codes
 SUPPORTED_LANGUAGES: List[Dict[str, str]] = [
     {"code": "auto", "name": "Auto-Detect Language", "nllb": ""},
+    {"code": "none", "name": "Skip Translation (Keep Spoken Language)", "nllb": ""},
     {"code": "da", "name": "Danish (Dansk)", "nllb": "dan_Latn"},
     {"code": "en", "name": "English", "nllb": "eng_Latn"},
     {"code": "es", "name": "Spanish (Español)", "nllb": "spa_Latn"},
