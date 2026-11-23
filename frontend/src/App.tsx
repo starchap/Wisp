@@ -39,7 +39,10 @@ import {
   SettingsTab,
 } from './components/Modals';
 import { SpeakerPanel } from './components/SpeakerPanel';
-import { TranscriptFeed } from './components/TranscriptFeed';
+import {
+  TranscriptFeed,
+  TranscriptViewMode,
+} from './components/TranscriptFeed';
 import {
   I18nContext,
   TRANSLATIONS,
@@ -74,7 +77,8 @@ export function App() {
     rms_level: 0,
   });
 
-  const [showTranslated, setShowTranslated] = useState<boolean>(true);
+  const [transcriptViewMode, setTranscriptViewMode] =
+    useState<TranscriptViewMode>('translated');
   const [activeSegmentId, setActiveSegmentId] = useState<string | null>(null);
   const [seekTarget, setSeekTarget] = useState<{
     time: number;
@@ -747,8 +751,8 @@ export function App() {
               session={activeSession}
               languages={config?.languages || []}
               activeSegmentId={activeSegmentId}
-              showTranslated={showTranslated}
-              onToggleTranslated={setShowTranslated}
+              viewMode={transcriptViewMode}
+              onChangeViewMode={setTranscriptViewMode}
               onPlaySegment={handlePlaySegment}
               onOpenEditSession={() => openEditSessionDialog(activeSession)}
               onReprocessSession={async () => {

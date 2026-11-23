@@ -28,12 +28,14 @@ import {
   TranscriptSegment,
 } from '../types';
 
+export type TranscriptViewMode = 'original' | 'corrected' | 'translated';
+
 interface TranscriptFeedProps {
   session: MeetingSession;
   languages: SupportedLanguage[];
   activeSegmentId: string | null;
-  showTranslated: boolean;
-  onToggleTranslated: (translated: boolean) => void;
+  viewMode: TranscriptViewMode;
+  onChangeViewMode: (mode: TranscriptViewMode) => void;
   onPlaySegment: (segment: TranscriptSegment) => void;
   onOpenEditSession?: () => void;
   onReprocessSession?: () => void;
@@ -62,8 +64,9 @@ interface GroupedTurn {
   speakerColor: string;
   firstSegment: TranscriptSegment;
   segments: TranscriptSegment[];
+  rawOriginalParagraph: string;
+  correctedParagraph: string;
   translatedParagraph: string;
-  originalParagraph: string;
 }
 
 function groupConsecutiveTurns(session: MeetingSession): GroupedTurn[] {
@@ -72,11 +75,15 @@ function groupConsecutiveTurns(session: MeetingSession): GroupedTurn[] {
     const spk = session.speakers[seg.speaker_id];
     const spkName = spk ? spk.name : seg.speaker_id;
     const spkColor = spk ? spk.color : '#3B82F6';
+    const rawText = (seg.raw_text || seg.original_text || '').trim();
+    const corrText = (seg.original_text || rawText).trim();
+    const transText = (seg.translated_text || corrText).trim();
     const prev = turns[turns.length - 1];
     if (prev && prev.speakerId === seg.speaker_id) {
       prev.segments.push(seg);
-      prev.translatedParagraph = `${prev.translatedParagraph} ${seg.translated_text.trim()}`.trim();
-      prev.originalParagraph = `${prev.originalParagraph} ${seg.original_text.trim()}`.trim();
+      prev.rawOriginalParagraph = `${prev.rawOriginalParagraph} ${rawText}`.trim();
+      prev.correctedParagraph = `${prev.correctedParagraph} ${corrText}`.trim();
+      prev.translatedParagraph = `${prev.translatedParagraph} ${transText}`.trim();
     } else {
       turns.push({
         speakerId: seg.speaker_id,
@@ -84,8 +91,9 @@ function groupConsecutiveTurns(session: MeetingSession): GroupedTurn[] {
         speakerColor: spkColor,
         firstSegment: seg,
         segments: [seg],
-        translatedParagraph: seg.translated_text.trim(),
-        originalParagraph: seg.original_text.trim(),
+        rawOriginalParagraph: rawText,
+        correctedParagraph: corrText,
+        translatedParagraph: transText,
       });
     }
   }
@@ -94,16 +102,19 @@ function groupConsecutiveTurns(session: MeetingSession): GroupedTurn[] {
 
 export function buildWordCopyText(
   session: MeetingSession,
-  showTranslated = true
+  viewMode: TranscriptViewMode = 'translated'
 ): string {
   const turns = groupConsecutiveTurns(session);
   return turns
-    .map(
-      (t) =>
-        `${t.speakerName}:\n${
-          showTranslated ? t.translatedParagraph : t.originalParagraph
-        }`
-    )
+    .map((t) => {
+      const body =
+        viewMode === 'original'
+          ? t.rawOriginalParagraph
+          : viewMode === 'corrected'
+          ? t.correctedParagraph
+          : t.translatedParagraph;
+      return `${t.speakerName}:\n${body}`;
+    })
     .join('\n\n\n');
 }
 
@@ -111,8 +122,8 @@ export const TranscriptFeed: React.FC<TranscriptFeedProps> = ({
   session,
   languages,
   activeSegmentId,
-  showTranslated,
-  onToggleTranslated,
+  viewMode,
+  onChangeViewMode,
   onPlaySegment,
   onOpenEditSession,
   onReprocessSession,
@@ -128,11 +139,17 @@ export const TranscriptFeed: React.FC<TranscriptFeedProps> = ({
   const { t } = useI18n();
   const [copiedWord, setCopiedWord] = useState(false);
 
+  const isTranslationSkipped =
+    session.target_language === 'none' || session.translation_model === 'none';
+
   const targetLangObj = languages.find(
-    (l) => l.code === session.target_language
+    (l) => l.code === session.target_language && l.code !== 'none'
   );
-  const targetLangLabel =
-    targetLangObj?.name || session.target_language.toUpperCase();
+  const targetLangLabel = isTranslationSkipped
+    ? ''
+    : targetLangObj
+    ? targetLangObj.name.split(' ')[0]
+    : session.target_language.toUpperCase();
 
   const groupedTurns = groupConsecutiveTurns(session);
   const isLiveSession = session.session_type === 'live';
@@ -141,7 +158,7 @@ export const TranscriptFeed: React.FC<TranscriptFeedProps> = ({
   const isVoiceActive = isRecording && (liveState?.rms_level || 0) > 0.005;
 
   const handleCopyForWord = () => {
-    const text = buildWordCopyText(session, showTranslated);
+    const text = buildWordCopyText(session, viewMode);
     navigator.clipboard.writeText(text);
     setCopiedWord(true);
     setTimeout(() => setCopiedWord(false), 2000);
@@ -292,33 +309,46 @@ export const TranscriptFeed: React.FC<TranscriptFeedProps> = ({
             </>
           )}
 
-          {/* Single Clean Toggle: Translated ON vs OFF (Original Spoken) */}
-          <div className="flex items-center gap-1.5 bg-slate-900 p-1 rounded-xl border border-slate-800">
+          {/* Clean 3-Tab Toggle: Original | Corrected | Translated (English) */}
+          <div className="flex items-center gap-1 bg-slate-900 p-1 rounded-xl border border-slate-800">
             <button
               type="button"
-              onClick={() => onToggleTranslated(true)}
+              onClick={() => onChangeViewMode('original')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                viewMode === 'original'
+                  ? 'bg-blue-600 text-white shadow'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              {t('originalTab')}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onChangeViewMode('corrected')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                viewMode === 'corrected'
+                  ? 'bg-blue-600 text-white shadow'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              {t('correctedTab')}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onChangeViewMode('translated')}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
-                showTranslated
+                viewMode === 'translated'
                   ? 'bg-blue-600 text-white shadow'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
               <Languages className="w-3.5 h-3.5" />
               <span>
-                {t('translated')} ({targetLangLabel})
+                {t('translated')}
+                {targetLangLabel ? ` (${targetLangLabel})` : ''}
               </span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => onToggleTranslated(false)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
-                !showTranslated
-                  ? 'bg-slate-700 text-white shadow'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              {t('originalSpoken')}
             </button>
           </div>
 
@@ -447,9 +477,12 @@ export const TranscriptFeed: React.FC<TranscriptFeedProps> = ({
               const isTurnPlaying = turn.segments.some(
                 (s) => s.id === activeSegmentId
               );
-              const paragraphText = showTranslated
-                ? turn.translatedParagraph
-                : turn.originalParagraph;
+              const paragraphText =
+                viewMode === 'original'
+                  ? turn.rawOriginalParagraph
+                  : viewMode === 'corrected'
+                  ? turn.correctedParagraph
+                  : turn.translatedParagraph;
 
               return (
                 <div
