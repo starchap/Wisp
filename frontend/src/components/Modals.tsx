@@ -117,25 +117,57 @@ const FALLBACK_MODELS_STATUS: ModelsStatus = {
     },
     {
       id: 'turbo',
-      name: 'Whisper Large-v3-Turbo (~1.6 GB)',
+      name: 'Whisper Large-v3-Turbo (~1.6 GB) — Fast Large Multilingual',
       description: 'Near Large-v3 quality at much faster speed.',
       size_mb: '1600',
       downloaded: false,
     },
     {
+      id: 'large-v3',
+      name: 'Whisper Large-v3 Full 32-Layer (~1.77 GB) — Deep Multilingual & Danish',
+      description:
+        'Full 32-decoder-layer OpenAI Whisper Large-v3 (INT8) for maximum context depth in overlapping speech.',
+      size_mb: '1775',
+      downloaded: false,
+    },
+    {
       id: 'hviske-v2',
-      name: 'Hviske v2 — Danish Specialist (CoRal Whisper Large-v3, ~1.06 GB)',
+      name: 'Hviske v2 — Danish Specialist (CoRal Whisper Large-v3 Q4, ~1.06 GB)',
       description:
         'Specialized Danish Speech-to-Text model (Syv.ai / CoRal) fine-tuned specifically on Danish dialects, compound words, and landmarks.',
       size_mb: '1065',
       downloaded: false,
     },
     {
+      id: 'hviske-v2-int8',
+      name: 'Hviske v2 High-Precision — Danish Specialist (CoRal Whisper Large-v3 INT8, ~1.62 GB)',
+      description:
+        'Higher-precision 8-bit quantized Hviske v2 Danish Specialist for sharper Danish word endings, names, and complex interviews.',
+      size_mb: '1625',
+      downloaded: false,
+    },
+    {
+      id: 'hviske-v2-fp16',
+      name: 'Hviske v2 Ultra — Danish Specialist (CoRal Whisper Large-v3 FP16, ~3.22 GB)',
+      description:
+        'Uncompressed 16-bit Hviske v2 Danish Specialist (3.22 GB) delivering the maximum possible Danish transcription accuracy.',
+      size_mb: '3222',
+      downloaded: false,
+    },
+    {
       id: 'roest-315m',
-      name: 'Røst 315M — Danish Fast Acoustic Specialist (CoRal Wav2Vec2, ~303 MB)',
+      name: 'Røst 315M — Danish Fast Acoustic Specialist (CoRal Wav2Vec2 INT8, ~303 MB)',
       description:
         'Ultra-fast native Danish acoustic speech recognizer (Alexandra Instituttet / CoRal project) trained purely on Danish speech.',
       size_mb: '303',
+      downloaded: false,
+    },
+    {
+      id: 'roest-v3-315m',
+      name: 'Røst v3 315M — CoRal v3 Danish Acoustic Specialist (FP16, ~631 MB)',
+      description:
+        '3rd-generation Røst Danish Wav2Vec2 model trained on the newest CoRal-v3 conversational & dialect dataset in full 16-bit precision.',
+      size_mb: '631',
       downloaded: false,
     },
   ],

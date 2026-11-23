@@ -107,18 +107,21 @@ def get_whisper_onnx_paths(model_id: str) -> Dict[str, Path]:
     info = WHISPER_MAP.get(model_id, WHISPER_MAP[DEFAULT_WHISPER_MODEL])
     d = get_whisper_model_dir(model_id)
     if info.get("engine") == "hf-whisper-onnx":
+        enc_rel = info.get("encoder_file", "onnx/encoder_model_q4.onnx")
+        dec_rel = info.get("decoder_file", "onnx/decoder_model_merged_q4.onnx")
         return {
             "dir": d,
-            "encoder": d / "onnx" / "encoder_model_q4.onnx",
-            "decoder": d / "onnx" / "decoder_model_merged_q4.onnx",
+            "encoder": d / enc_rel,
+            "decoder": d / dec_rel,
             "tokens": d / "tokenizer.json",
             "engine": Path("hf-whisper-onnx"),
         }
     if info.get("engine") == "wav2vec2-onnx":
+        onnx_rel = info.get("onnx_file", "onnx/model_quantized.onnx")
         return {
             "dir": d,
-            "encoder": d / "onnx" / "model_quantized.onnx",
-            "decoder": d / "onnx" / "model_quantized.onnx",
+            "encoder": d / onnx_rel,
+            "decoder": d / onnx_rel,
             "tokens": d / "vocab.json",
             "engine": Path("wav2vec2-onnx"),
         }
@@ -270,16 +273,19 @@ def ensure_whisper_model(model_id: str = DEFAULT_WHISPER_MODEL) -> Dict[str, Pat
 
     print(f"[ModelManager] Downloading Whisper ONNX '{model_id}' from {repo_id} to {target_dir} ...")
     if info.get("engine") == "hf-whisper-onnx":
+        enc_rel = info.get("encoder_file", "onnx/encoder_model_q4.onnx")
+        dec_rel = info.get("decoder_file", "onnx/decoder_model_merged_q4.onnx")
         files_to_fetch = [
             "config.json",
             "generation_config.json",
             "preprocessor_config.json",
             "tokenizer.json",
             "tokenizer_config.json",
-            "onnx/encoder_model_q4.onnx",
-            "onnx/decoder_model_merged_q4.onnx",
+            enc_rel,
+            dec_rel,
         ]
     elif info.get("engine") == "wav2vec2-onnx":
+        onnx_rel = info.get("onnx_file", "onnx/model_quantized.onnx")
         files_to_fetch = [
             "config.json",
             "preprocessor_config.json",
@@ -288,7 +294,7 @@ def ensure_whisper_model(model_id: str = DEFAULT_WHISPER_MODEL) -> Dict[str, Pat
             "vocab.json",
             "added_tokens.json",
             "special_tokens_map.json",
-            "onnx/model_quantized.onnx",
+            onnx_rel,
         ]
     else:
         prefix = info["prefix"]
