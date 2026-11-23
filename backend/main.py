@@ -612,7 +612,9 @@ def api_merge_speakers(session_id: str, req: MergeSpeakersRequest):
                     continue
                 clip = store.read_audio_slice(session.id, seg.start, seg.end)
                 if len(clip) >= int(SAMPLE_RATE * 0.25):
-                    conv_ctx = pipeline._build_conversation_context(session)
+                    conv_ctx, spk_ctx = pipeline._build_conversation_context(
+                        session, current_speaker_id=tgt_id
+                    )
                     det_lang, orig, trans, conf, raw_stt = pipeline.transcribe_and_translate_clip(
                         clip,
                         forced_language=tgt_spk.language,
@@ -622,6 +624,7 @@ def api_merge_speakers(session_id: str, req: MergeSpeakersRequest):
                         translation_model=session.translation_model,
                         allowed_languages=session.spoken_languages,
                         conversation_context=conv_ctx,
+                        speaker_context=spk_ctx,
                     )
                     if orig:
                         seg.source_language = det_lang
@@ -665,7 +668,9 @@ def api_reassign_segment_speaker(
     if req.reprocess_with_speaker_language and spk.language != "auto":
         clip = store.read_audio_slice(session.id, target_seg.start, target_seg.end)
         if len(clip) > int(SAMPLE_RATE * 0.2):
-            conv_ctx = pipeline._build_conversation_context(session)
+            conv_ctx, spk_ctx = pipeline._build_conversation_context(
+                session, current_speaker_id=spk.id
+            )
             det_lang, orig, trans, conf, raw_stt = pipeline.transcribe_and_translate_clip(
                 clip,
                 forced_language=spk.language,
@@ -675,6 +680,7 @@ def api_reassign_segment_speaker(
                 translation_model=session.translation_model,
                 allowed_languages=session.spoken_languages,
                 conversation_context=conv_ctx,
+                speaker_context=spk_ctx,
             )
             if orig:
                 target_seg.source_language = det_lang

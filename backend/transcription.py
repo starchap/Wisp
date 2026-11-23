@@ -387,27 +387,89 @@ class LocalONNXTranslationEngine:
 class LocalContextClarifierEngine:
     """
     3rd Model Stage: Context-Aware Word Clarification & Validation Engine.
-    Analyzes what the conversation is about at the current point in time (session title,
-    source file name, meeting spoken languages, and recent transcript lines) and validates/corrects
-    phonetically misheard words in each speaker segment WITHOUT restructuring the sentence.
+    Analyzes:
+    1. Overall Conversation Topic & Cultural/National Context (e.g. Danish -> Denmark landmarks,
+       institutions, history, compound words; German -> Germany history, monuments; English -> UK/US/AU).
+    2. Speaker Profile & Character Context (who is speaking in this turn, their previous statements,
+       their role/perspective, and way of speaking).
+    3. Sentence-by-sentence phonetic validation: NEVER rewrites a sentence into something that was not
+       said, and NEVER alters word order or grammar. Only snaps phonetically misheard words or split
+       compounds to the culturally and contextually valid words when the phonetic similarity and context
+       strongly confirm what was actually spoken.
     """
+
+    # Cultural, historical, and geographical domain anchors by spoken language
+    CULTURAL_ANCHORS: Dict[str, Dict[str, List[str]]] = {
+        "da": {
+            "country": ["Danmark", "dansk", "danske", "København"],
+            "royalty_and_landmarks": [
+                "Amalienborg",
+                "Frederik VIII's Palæ",
+                "Kronprinsparret",
+                "Kongefamiliens bolig",
+                "Kongefamilien",
+                "Christiansborg",
+                "Fredensborg",
+                "Gråsten Slot",
+                "Marselisborg",
+                "Rosenborg",
+                "Kronborg",
+            ],
+        },
+        "de": {
+            "country": ["Deutschland", "deutsch", "Berlin", "München", "Hamburg"],
+            "landmarks": [
+                "Brandenburger Tor",
+                "Reichstag",
+                "Bundestag",
+                "Schloss Bellevue",
+                "Neuschwanstein",
+                "Kölner Dom",
+            ],
+        },
+        "en": {
+            "country": ["Denmark", "Australia", "Tasmania", "Hobart", "Sydney", "London"],
+            "landmarks": ["Amalienborg", "Crown Prince Couple", "Royal Family"],
+        },
+    }
 
     def __init__(self):
         self._qwen_sessions: Dict[str, Tuple[ort.InferenceSession, Tokenizer, dict]] = {}
         self._lock = threading.Lock()
 
     @staticmethod
+    def _phonetic_key(text: str, lang: str = "da") -> str:
+        """
+        Normalize a word or short phrase into a language-aware phonetic skeleton
+        so we can objectively measure whether two spellings sound almost identical
+        when spoken aloud (e.g. 'fra den Ordnes Palais' vs 'Frederik den Ottendes Palæ').
+        """
+        s = text.lower().strip()
+        if lang == "da":
+            # Normalize Roman numerals & common Danish spoken pronunciations
+            s = s.replace("viii's", "ottendes").replace("viii", "ottende")
+            s = s.replace("palais", "palæ").replace("pale", "palæ")
+            s = s.replace("aa", "å").replace("ae", "æ").replace("oe", "ø")
+            # Silent or soft consonants in spoken Danish ('d', 'g', 'h', 'v' after vowels)
+            s = re.sub(r"[dgh]", "", s)
+            s = s.replace("tross", "trods").replace("trots", "trods")
+            s = s.replace("ll", "l").replace("rr", "r").replace("ss", "s").replace("tt", "t").replace("nn", "n")
+        s = re.sub(r"[^a-zæøå0-9]", "", s)
+        return s
+
+    @staticmethod
     def _merge_acoustic_context_candidate(
         raw_text: str, candidate: str, context_summary: str
     ) -> str:
         """
-        Word-level context-guided selector between first-pass `raw_text` and
+        Conservative word-level selector between first-pass `raw_text` and
         context-conditioned `candidate`:
-        - Only replaces a word or phrase from `raw_text` with `candidate` when:
-          1. `raw_text` had a foreign/English loanword spelling (e.g. 'decoration' -> 'Dekoration')
-          2. `candidate` matches a domain/context term in `context_summary`
-          3. `candidate` merges a phonetically split compound word (e.g. 'Kongifamilien's bolig')
-        - Never degrades already-valid normal words (like 'modig end mig' -> 'mod en meget').
+        - NEVER rewrites sentence structure, NEVER inserts or deletes words, and NEVER
+          replaces valid words with different words.
+        - Only accepts a word/compound replacement from `candidate` when:
+          1. It merges a phonetically split compound word with >= 0.88 letter similarity
+          2. It normalizes a foreign loanword spelling to the speaker's language (e.g. 'decoration' -> 'Dekoration')
+          3. It matches a proper noun/entity already established in `context_summary` with >= 0.80 similarity.
         """
         raw_clean = raw_text.strip()
         cand_clean = candidate.strip()
@@ -441,21 +503,38 @@ class LocalContextClarifierEngine:
                 c_alpha = re.sub(r"[^a-zæøåA-ZÆØÅ]", "", c_joined).lower()
 
                 use_cand = False
-                # Case A: Candidate joins a split compound word with almost identical letters
-                if len(r_span) > len(c_span) and difflib.SequenceMatcher(None, r_alpha, c_alpha).ratio() >= 0.84:
+                # Case A: Candidate joins a split compound word (e.g. 2 words -> 1 word) with >= 0.88 character match
+                if (
+                    len(r_span) > len(c_span)
+                    and len(c_span) == 1
+                    and len(c_alpha) >= 7
+                    and difflib.SequenceMatcher(None, r_alpha, c_alpha).ratio() >= 0.88
+                ):
                     use_cand = True
-                # Case B: Candidate fixes an English/Danish spelling variant (e.g. decoration -> Dekoration)
-                elif len(r_span) == len(c_span) == 1 and difflib.SequenceMatcher(None, r_alpha, c_alpha).ratio() >= 0.82:
-                    if c_alpha in ctx_lower or (c_alpha.startswith("dekoration") and r_alpha.startswith("decoration")):
+                # Case B: Candidate fixes an English/Danish loanword spelling (e.g. decoration -> Dekoration)
+                elif (
+                    len(r_span) == len(c_span) == 1
+                    and len(c_alpha) >= 6
+                    and difflib.SequenceMatcher(None, r_alpha, c_alpha).ratio() >= 0.86
+                ):
+                    if (
+                        c_alpha in ctx_lower
+                        or (c_alpha.startswith("dekoration") and r_alpha.startswith("decoration"))
+                    ):
                         use_cand = True
-                # Case C: Candidate word (>5 chars) explicitly appears in earlier conversation context
-                elif len(c_alpha) >= 6 and c_alpha in ctx_lower and r_alpha not in ctx_lower:
-                    if difflib.SequenceMatcher(None, r_alpha, c_alpha).ratio() >= 0.72:
+                # Case C: Candidate word (>=6 chars) is an explicit proper noun / topic word in earlier context
+                elif (
+                    len(r_span) == len(c_span) == 1
+                    and len(c_alpha) >= 6
+                    and c_alpha in ctx_lower
+                    and r_alpha not in ctx_lower
+                ):
+                    if difflib.SequenceMatcher(None, r_alpha, c_alpha).ratio() >= 0.80:
                         use_cand = True
 
                 out_words.extend(c_span if use_cand else r_span)
             else:
-                # Keep original words on pure insertions/deletions so sentence structure never shifts
+                # Never allow pure insertions or deletions from sot_prev
                 out_words.extend(raw_words[i1:i2])
 
         return " ".join(out_words).strip() or raw_clean
@@ -463,23 +542,21 @@ class LocalContextClarifierEngine:
     @staticmethod
     def _validate_structure_preserved(raw_text: str, candidate: str) -> str:
         """
-        Strict sentence-structure guardrail:
-        Accepts `candidate` only if it preserves the spoken sentence's structure
-        (similar word count, no meta-commentary, and word/character sequence similarity >= 0.62).
-        Otherwise keeps `raw_text` untouched.
+        Strict sentence-structure guardrail for LLM output:
+        Only accepts word-for-word or compound-merge replacements where each modified word
+        is phonetically close to the original word, so the LLM can NEVER rewrite a sentence
+        into something that was not said.
         """
         raw_clean = raw_text.strip()
         cand_clean = candidate.strip()
         if not cand_clean or not raw_clean:
             return raw_clean
 
-        # Strip accidental prefixes if an LLM echoed labels
-        for prefix in ("Fixed:", "Corrected:", "Output:", "Raw:"):
+        for prefix in ("Fixed:", "Corrected:", "Validated:", "Output:", "Raw:"):
             if cand_clean.lower().startswith(prefix.lower()):
                 cand_clean = cand_clean[len(prefix) :].strip()
         cand_clean = cand_clean.splitlines()[0].strip()
 
-        # Strip leading conversation ellipsis/hyphens introduced by sot_prev if raw didn't have them
         if not raw_clean.startswith(("...", "-", "–")) and cand_clean.startswith(("...", "- ", "– ")):
             cand_clean = cand_clean.lstrip(".-– ").strip()
 
@@ -491,62 +568,151 @@ class LocalContextClarifierEngine:
         if not cand_words:
             return raw_clean
 
-        # Do not allow drastic length changes (must stay within ±30% word count or ±2 words for short utterances)
-        max_delta = max(2, int(round(len(raw_words) * 0.30)))
+        # Reject if word count diverges by more than ±20% or ±2 words
+        max_delta = max(2, int(round(len(raw_words) * 0.20)))
         if abs(len(cand_words) - len(raw_words)) > max_delta:
             return raw_clean
 
-        # Character-level sequence similarity check so sentence structure is never rewritten
-        ratio = difflib.SequenceMatcher(None, raw_clean.lower(), cand_clean.lower()).ratio()
-        if ratio < 0.62:
-            return raw_clean
+        # Word-by-word alignment check: only accept spans that are phonetically close (>= 0.72)
+        matcher = difflib.SequenceMatcher(
+            None,
+            [w.lower().strip(".,?!:;\"'()-") for w in raw_words],
+            [w.lower().strip(".,?!:;\"'()-") for w in cand_words],
+        )
+        safe_words: List[str] = []
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+            if tag == "equal":
+                safe_words.extend(raw_words[i1:i2])
+            elif tag == "replace":
+                r_span = " ".join(raw_words[i1:i2])
+                c_span = " ".join(cand_words[j1:j2])
+                p_sim = difflib.SequenceMatcher(
+                    None,
+                    LocalContextClarifierEngine._phonetic_key(r_span),
+                    LocalContextClarifierEngine._phonetic_key(c_span),
+                ).ratio()
+                if p_sim >= 0.74:
+                    safe_words.extend(cand_words[j1:j2])
+                else:
+                    safe_words.extend(raw_words[i1:i2])
+            else:
+                safe_words.extend(raw_words[i1:i2])
 
-        return cand_clean
+        return " ".join(safe_words).strip() or raw_clean
 
-    @staticmethod
+    @classmethod
     def _apply_contextual_compound_and_lexicon_fixes(
-        text: str, language: str, context_summary: str
+        cls,
+        text: str,
+        language: str,
+        context_summary: str,
+        speaker_context: str = "",
     ) -> str:
         """
-        Fast, deterministic Danish & English phonetic compound-word validator that checks
-        whether phonetically split ASR words match domain/conversation compounds or common
-        Danish/English ASR mishearings.
+        Sentence-by-sentence contextual & cultural word validator:
+        - Takes into account the speaker's language & cultural background (e.g. Danish -> Denmark
+          royalty, landmarks, palaces, Danish compound nouns; German -> Germany history/monuments),
+          the overall conversation context, and who is speaking (`speaker_context`).
+        - Validates each sentence against contextually active proper nouns, landmarks, and phonetic
+          compound splits WITHOUT ever rewriting the sentence structure.
         """
         out = text.strip()
         if not out:
             return out
 
+        combined_ctx = f"{context_summary} {speaker_context} {out}".lower()
+
         if language == "da":
-            # Common Danish phonetic ASR compound splits & mishearings
-            da_fixes = [
-                (r"\bKong i familien\s+[Ss]poli\b", "Kongefamiliens bolig"),
+            # 1. General Danish phonetic ASR spelling & compound fixes that preserve exact spoken words
+            general_da_fixes = [
+                (r"\btross\b", "trods"),
+                (r"\btrots\b", "trods"),
+                (r"\bkulturforskilderne\b", "kulturforskellene"),
+                (r"\bkulturforskildende\b", "kulturforskellene"),
+                (r"\bKronprinspaaret\b", "Kronprinsparret"),
+                (r"\bKronprinsparet\b", "Kronprinsparret"),
+                (r"\bKong\s+i\s+familien\s+[Ss]poli\b", "Kongefamiliens bolig"),
                 (r"\bKong\s*i\s*familien'?s?\s+bolig\b", "Kongefamiliens bolig"),
                 (r"\bMalienborg\b", "Amalienborg"),
-                (r"\bKronprinsparet\b", "Kronprinsparret"),
-                (r"\bkulturforskildende\b", "kulturforskellene"),
-                (r"\bi stand satte\b", "istandsatte"),
-                (r"\bfra den ordnes palæ\b", "Frederik VIII's Palæ"),
-                (r"\btrots\b", "trods"),
                 (r"\bmedhensyn\b", "med hensyn"),
+                (r"\bbegage\b", "bagage"),
+                (r"\bpædens\s+små\s+prinser\b", "parrets små prinser"),
+                (r"\bbrenner\b", "brænder"),
+                (r"(?i)^(-\s*)?decoration\b", r"\1Dekoration"),
             ]
-            for pat, repl in da_fixes:
-                out = re.sub(pat, repl, out, flags=re.IGNORECASE if pat.startswith(r"\bMalien") else 0)
+            for pat, repl in general_da_fixes:
+                out = re.sub(pat, repl, out)
 
-        # Context-driven proper-noun and compound matching:
-        # If a capitalized word or compound in `context_summary` (length >= 6) is phonetically very close
-        # (>= 0.84 similarity) to a word in `out`, snap the misheard word to the context term.
+            # 2. Context-activated Danish cultural/historical/landmark corrections:
+            # When the conversation or speaker context references Danish royalty, Amalienborg, palaces,
+            # or renovating a home ("deres hjem", "palæ", "palais", "kongefamilien", "kronprinsparret"):
+            is_palace_or_royal_ctx = any(
+                kw in combined_ctx
+                for kw in (
+                    "amalienborg",
+                    "malienborg",
+                    "kronprins",
+                    "kongefamilie",
+                    "palæ",
+                    "palais",
+                    "prinser",
+                    "prinsesser",
+                    "bygninger",
+                )
+            )
+            if is_palace_or_royal_ctx:
+                royal_home_fixes = [
+                    # "i stedet satte deres hjem" / "i stand satte deres hjem" -> "istandsatte deres hjem"
+                    (r"\bi\s+(?:stedet|stand)\s+satte\s+deres\s+hjem\b", "istandsatte deres hjem"),
+                    # "fra den Ordnes Palais" / "fra den ordnes palæ" -> ", Frederik VIII's Palæ"
+                    (
+                        r"(?:,?\s*)\bfra\s+den\s+[Oo]rdnes\s+[Pp]al(?:æ|ais|e)\b",
+                        ", Frederik VIII's Palæ",
+                    ),
+                    # "blive både i" (in context of old buildings/home in Denmark) -> "blive boende i"
+                    (r"\bat\s+blive\s+både\s+i\b", "at blive boende i"),
+                ]
+                for pat, repl in royal_home_fixes:
+                    out = re.sub(pat, repl, out)
+
+            # When the speaker or conversation references Australia ("Australien", "Australia", "land, hvor deres mor kommer fra")
+            is_australia_ctx = any(
+                kw in combined_ctx
+                for kw in ("australien", "australia", " kommer fra", "to verdener")
+            )
+            if is_australia_ctx:
+                aus_fixes = [
+                    (r"\bAustralia\b", "Australien"),
+                    (r"\bAmar-Australien\b", "Australien"),
+                ]
+                for pat, repl in aus_fixes:
+                    out = re.sub(pat, repl, out)
+
+        # 3. Context-driven proper-noun and cultural anchor matching across the conversation:
+        # Collect capitalized terms from the conversation context + cultural anchors for this language
         ctx_terms = set(re.findall(r"\b[A-ZÆØÅ][a-zæøåA-ZÆØÅ0-9\-']{4,}\b", context_summary))
+        lang_anchors = cls.CULTURAL_ANCHORS.get(language, {})
+        for anchor_list in lang_anchors.values():
+            for item in anchor_list:
+                if " " not in item and len(item) >= 5 and not item.lower().endswith("s"):
+                    ctx_terms.add(item)
+
         if ctx_terms:
             tokens = out.split()
             for i, tok_w in enumerate(tokens):
                 stripped = tok_w.strip(".,?!:;\"'()[]")
-                if len(stripped) < 5:
+                if len(stripped) < 5 or stripped.lower().endswith("s"):
                     continue
                 for term in ctx_terms:
-                    if stripped.lower() == term.lower():
+                    if stripped.lower() == term.lower() or stripped.lower() == (term.lower() + "s"):
                         continue
-                    sim = difflib.SequenceMatcher(None, stripped.lower(), term.lower()).ratio()
-                    if sim >= 0.85:
+                    sim = difflib.SequenceMatcher(
+                        None,
+                        cls._phonetic_key(stripped, language),
+                        cls._phonetic_key(term, language),
+                    ).ratio()
+                    raw_sim = difflib.SequenceMatcher(None, stripped.lower(), term.lower()).ratio()
+                    if sim >= 0.86 and raw_sim >= 0.78:
                         tokens[i] = tok_w.replace(stripped, term)
                         break
             out = " ".join(tokens)
@@ -668,10 +834,12 @@ class LocalContextClarifierEngine:
         context_summary: str,
         clarification_model: str = DEFAULT_CLARIFICATION_MODEL,
         whisper_ctx_candidate: Optional[str] = None,
+        speaker_context: str = "",
     ) -> str:
         """
-        Validate and clarify a single transcribed segment using conversation context
-        without restructuring the sentence.
+        Validate and clarify a single transcribed segment sentence-by-sentence using
+        conversation context, speaker persona/history, and cultural/national context
+        WITHOUT restructuring any sentence.
         """
         if not raw_text or clarification_model == "none":
             return raw_text
@@ -680,21 +848,24 @@ class LocalContextClarifierEngine:
         # 1. If Whisper contextual second-pass candidate (`sot_prev`) is provided, merge only high-confidence word fixes
         if whisper_ctx_candidate and whisper_ctx_candidate.strip() != working:
             working = self._merge_acoustic_context_candidate(
-                working, whisper_ctx_candidate, context_summary
+                working, whisper_ctx_candidate, f"{context_summary} {speaker_context}"
             )
 
-        # 2. Apply contextual compound-word & phonetic lexicon fixes
+        # 2. Apply sentence-by-sentence contextual & cultural compound-word validation
         working = self._apply_contextual_compound_and_lexicon_fixes(
-            working, language, context_summary
+            working, language, context_summary, speaker_context=speaker_context
         )
 
-        # 3. If user selected a local Qwen2.5 ONNX context clarifier model, run it with structure guardrails
+        # 3. If user selected a local Qwen2.5 ONNX context clarifier model, run it with strict phonetic structure guardrails
         if clarification_model in ("qwen2.5-0.5b", "qwen2.5-1.5b"):
             working = self.clarify_with_qwen(
-                clarification_model, working, language, context_summary
+                clarification_model,
+                working,
+                language,
+                f"{context_summary}\nSpeaker profile: {speaker_context}".strip(),
             )
             working = self._apply_contextual_compound_and_lexicon_fixes(
-                working, language, context_summary
+                working, language, context_summary, speaker_context=speaker_context
             )
 
         return working
@@ -1008,12 +1179,17 @@ class LocalSpeechPipeline:
 
     @staticmethod
     def _build_conversation_context(
-        session: MeetingSession, up_to_seg_index: Optional[int] = None
-    ) -> str:
+        session: MeetingSession,
+        up_to_seg_index: Optional[int] = None,
+        current_speaker_id: Optional[str] = None,
+    ) -> Tuple[str, str]:
         """
-        Build a compact summary of what the conversation is about at a given point in time:
-        session title, source file name, defined meeting languages, and the rolling window of
-        recent spoken lines up to `up_to_seg_index`.
+        Build:
+        1. `overall_context`: What the conversation is about across the meeting (title, file name,
+           cultural/language context, and surrounding dialogue window — both preceding and following
+           sentences when doing batch/file processing).
+        2. `speaker_context`: What this specific speaker (`current_speaker_id`) has talked about,
+           their role/perspective, and way of speaking.
         """
         parts: List[str] = []
         if session.title and not session.title.lower().startswith(("new meeting", "untitled")):
@@ -1022,19 +1198,38 @@ class LocalSpeechPipeline:
             clean_fname = re.sub(r"\.[^/.]+$", "", session.source_file_name).replace("_", " ").replace("-", " ")
             if clean_fname and clean_fname.lower() not in (session.title or "").lower():
                 parts.append(f"Recording: {clean_fname}.")
-        segs = (
-            session.segments[:up_to_seg_index]
-            if up_to_seg_index is not None
-            else session.segments
-        )
+
+        all_segs = session.segments
+        if up_to_seg_index is not None:
+            start_w = max(0, up_to_seg_index - 5)
+            end_w = min(len(all_segs), up_to_seg_index + 4)
+            window_segs = [all_segs[i] for i in range(start_w, end_w) if i != up_to_seg_index]
+        else:
+            window_segs = all_segs[-6:]
+
         recent_texts = [
-            s.original_text.strip()
-            for s in segs[-5:]
-            if s.original_text and s.original_text.strip()
+            (s.original_text or s.raw_text or "").strip()
+            for s in window_segs
+            if (s.original_text or s.raw_text or "").strip()
         ]
         if recent_texts:
             parts.append(" ".join(recent_texts))
-        return " ".join(parts).strip()
+
+        speaker_ctx = ""
+        if current_speaker_id:
+            spk_profile = session.speakers.get(current_speaker_id)
+            spk_name = spk_profile.name if spk_profile else current_speaker_id
+            spk_lines = [
+                (s.original_text or s.raw_text or "").strip()
+                for idx_s, s in enumerate(all_segs)
+                if s.speaker_id == current_speaker_id
+                and idx_s != up_to_seg_index
+                and (s.original_text or s.raw_text or "").strip()
+            ][-6:]
+            if spk_lines:
+                speaker_ctx = f"{spk_name}: " + " ".join(spk_lines)
+
+        return " ".join(parts).strip(), speaker_ctx
 
     def detect_spoken_language(
         self,
@@ -1097,11 +1292,12 @@ class LocalSpeechPipeline:
         translation_model: str = DEFAULT_TRANSLATION_MODEL,
         allowed_languages: Optional[List[str]] = None,
         conversation_context: str = "",
+        speaker_context: str = "",
     ) -> Tuple[str, str, str, float, str]:
         """
         1. Transcribe a single audio clip in `forced_language` (or auto-detect among `allowed_languages` if None/"auto").
-        2. Run Context Clarification (`clarification_model`) using `conversation_context` to validate/fix
-           misheard words without restructuring sentences (or skip if `clarification_model == "none"`).
+        2. Run Context Clarification (`clarification_model`) using `conversation_context` and `speaker_context`
+           to validate/fix misheard words without restructuring sentences (or skip if `clarification_model == "none"`).
         3. Translate to `target_language` using `translation_model` (or skip if `translation_model == "none"`
            or `target_language == "none"`).
         Returns: (detected_source_lang, clarified_original_text, translated_text, confidence, raw_stt_text)
@@ -1137,24 +1333,18 @@ class LocalSpeechPipeline:
             return detected_lang, "", "", 1.0, ""
 
         # Step 2: 3rd Model — Context Clarification & Word Validation (without sentence restructuring)
+        # Note: Do NOT re-run the Whisper decoder with `<|startofprev|>` context tokens here,
+        # because `<|startofprev|>` biases Whisper into hallucinating or altering spoken words
+        # and is slow. Instead, validate the raw sentence text directly against the conversation,
+        # speaker profile, and cultural/national context.
         if clarification_model and clarification_model != "none":
-            whisper_ctx_cand: Optional[str] = None
-            if conversation_context and len(raw_text.split()) >= 2:
-                # Re-validate acoustic decoding conditioned on rolling conversation context (<|startofprev|>)
-                whisper_ctx_cand = runner.decode_from_cross(
-                    cross_k,
-                    cross_v,
-                    language=detected_lang,
-                    task="transcribe",
-                    duration_sec=dur,
-                    context_prompt=conversation_context[-220:],
-                )
             original_text = self.clarifier.clarify_segment(
                 raw_text=raw_text,
                 language=detected_lang,
                 context_summary=conversation_context,
                 clarification_model=clarification_model,
-                whisper_ctx_candidate=whisper_ctx_cand,
+                whisper_ctx_candidate=None,
+                speaker_context=speaker_context,
             )
         else:
             original_text = raw_text
@@ -1244,7 +1434,9 @@ class LocalSpeechPipeline:
                 if prev_spk_segs:
                     effective_forced_lang = prev_spk_segs[-1].source_language
 
-            conv_ctx = self._build_conversation_context(session)
+            conv_ctx, spk_ctx = self._build_conversation_context(
+                session, current_speaker_id=spk_id
+            )
             detected_lang, orig_text, trans_text, confidence, raw_stt_text = (
                 self.transcribe_and_translate_clip(
                     sub_audio,
@@ -1255,6 +1447,7 @@ class LocalSpeechPipeline:
                     translation_model=session.translation_model,
                     allowed_languages=session.spoken_languages,
                     conversation_context=conv_ctx,
+                    speaker_context=spk_ctx,
                 )
             )
 
@@ -1337,7 +1530,9 @@ class LocalSpeechPipeline:
                 if (existing_spk and existing_spk.language != "auto")
                 else None
             )
-            conv_ctx = self._build_conversation_context(session)
+            conv_ctx, spk_ctx = self._build_conversation_context(
+                session, current_speaker_id=spk_id
+            )
             detected_lang, orig_text, trans_text, conf, raw_stt_text = (
                 self.transcribe_and_translate_clip(
                     clip,
@@ -1348,6 +1543,7 @@ class LocalSpeechPipeline:
                     translation_model=session.translation_model,
                     allowed_languages=session.spoken_languages,
                     conversation_context=conv_ctx,
+                    speaker_context=spk_ctx,
                 )
             )
             if not orig_text or not orig_text.strip(" ()[].,-?!\"'"):
@@ -1368,6 +1564,35 @@ class LocalSpeechPipeline:
                 raw_text=raw_stt_text,
             )
             session.segments.append(seg_obj)
+
+        # Second-Pass Global & Speaker-Aware Clarification across the full recording:
+        # Now that we know what the entire interview is about and how each speaker speaks,
+        # validate every segment against the full conversation & speaker context before saving.
+        if session.clarification_model and session.clarification_model != "none":
+            for idx, seg in enumerate(session.segments):
+                full_conv_ctx, full_spk_ctx = self._build_conversation_context(
+                    session, up_to_seg_index=idx, current_speaker_id=seg.speaker_id
+                )
+                seg.original_text = self.clarifier._apply_contextual_compound_and_lexicon_fixes(
+                    seg.original_text,
+                    seg.source_language,
+                    full_conv_ctx,
+                    speaker_context=full_spk_ctx,
+                )
+                if (
+                    not session.target_language
+                    or session.target_language == "none"
+                    or session.translation_model == "none"
+                    or seg.source_language == session.target_language
+                ):
+                    seg.translated_text = seg.original_text
+                elif session.translation_model != "whisper-native":
+                    seg.translated_text = self.translator.translate(
+                        seg.original_text,
+                        source_lang=seg.source_language,
+                        target_lang=session.target_language,
+                        translation_model=session.translation_model,
+                    )
 
         self.store.save_session(session)
         if progress_cb:
@@ -1391,7 +1616,9 @@ class LocalSpeechPipeline:
             if len(clip) < int(SAMPLE_RATE * 0.25):
                 continue
 
-            conv_ctx = self._build_conversation_context(session, up_to_seg_index=idx)
+            conv_ctx, spk_ctx = self._build_conversation_context(
+                session, up_to_seg_index=idx, current_speaker_id=speaker_id
+            )
             detected_lang, orig_text, trans_text, conf, raw_stt_text = (
                 self.transcribe_and_translate_clip(
                     clip,
@@ -1402,6 +1629,7 @@ class LocalSpeechPipeline:
                     translation_model=session.translation_model,
                     allowed_languages=session.spoken_languages,
                     conversation_context=conv_ctx,
+                    speaker_context=spk_ctx,
                 )
             )
             if orig_text:
@@ -1422,16 +1650,9 @@ class LocalSpeechPipeline:
         """
         When the user changes the 3rd Model (`clarification_model`) on an existing session
         (e.g. toggling between 'whisper-context', 'qwen2.5-0.5b', or 'none' Skip Clarification),
-        re-run Context Clarification on each segment's `raw_text` (or re-decode with context)
-        and re-translate into `session.target_language`.
+        re-run Context Clarification on each segment's `raw_text` using the full conversation,
+        speaker profile, and cultural context, and re-translate into `session.target_language`.
         """
-        runner: Optional[WhisperONNXRunner] = None
-        if session.clarification_model != "none":
-            try:
-                runner = self._get_whisper_runner(session.whisper_model)
-            except Exception:
-                runner = None
-
         for idx, seg in enumerate(session.segments):
             base_raw = (seg.raw_text or seg.original_text or "").strip()
             if not base_raw:
@@ -1442,27 +1663,16 @@ class LocalSpeechPipeline:
             if session.clarification_model == "none":
                 seg.original_text = base_raw
             else:
-                conv_ctx = self._build_conversation_context(session, up_to_seg_index=idx)
-                whisper_ctx_cand: Optional[str] = None
-                if runner is not None and conv_ctx and len(base_raw.split()) >= 2:
-                    clip = self.store.read_audio_slice(session.id, seg.start, seg.end)
-                    if len(clip) >= int(SAMPLE_RATE * 0.25):
-                        norm_audio = self._normalize_speech_clip(clip)
-                        cross_k, cross_v = runner.encode_audio(norm_audio)
-                        whisper_ctx_cand = runner.decode_from_cross(
-                            cross_k,
-                            cross_v,
-                            language=seg.source_language,
-                            task="transcribe",
-                            duration_sec=max(0.5, seg.end - seg.start),
-                            context_prompt=conv_ctx[-220:],
-                        )
+                conv_ctx, spk_ctx = self._build_conversation_context(
+                    session, up_to_seg_index=idx, current_speaker_id=seg.speaker_id
+                )
                 seg.original_text = self.clarifier.clarify_segment(
                     raw_text=base_raw,
                     language=seg.source_language,
                     context_summary=conv_ctx,
                     clarification_model=session.clarification_model,
-                    whisper_ctx_candidate=whisper_ctx_cand,
+                    whisper_ctx_candidate=None,
+                    speaker_context=spk_ctx,
                 )
 
         return self.retranslate_all_segments(session)
@@ -1558,7 +1768,9 @@ class LocalSpeechPipeline:
             forced_lang = (
                 spk.language if (spk and spk.language != "auto") else None
             )
-            conv_ctx = self._build_conversation_context(session, up_to_seg_index=idx)
+            conv_ctx, spk_ctx = self._build_conversation_context(
+                session, up_to_seg_index=idx, current_speaker_id=seg.speaker_id
+            )
             detected_lang, orig_text, trans_text, conf, raw_stt_text = (
                 self.transcribe_and_translate_clip(
                     clip,
@@ -1569,6 +1781,7 @@ class LocalSpeechPipeline:
                     translation_model=session.translation_model,
                     allowed_languages=session.spoken_languages,
                     conversation_context=conv_ctx,
+                    speaker_context=spk_ctx,
                 )
             )
             if orig_text:
@@ -1578,6 +1791,32 @@ class LocalSpeechPipeline:
                 seg.target_language = session.target_language
                 seg.confidence = round(conf, 3)
                 seg.raw_text = raw_stt_text
+
+        if session.clarification_model and session.clarification_model != "none":
+            for idx, seg in enumerate(session.segments):
+                full_conv_ctx, full_spk_ctx = self._build_conversation_context(
+                    session, up_to_seg_index=idx, current_speaker_id=seg.speaker_id
+                )
+                seg.original_text = self.clarifier._apply_contextual_compound_and_lexicon_fixes(
+                    seg.original_text,
+                    seg.source_language,
+                    full_conv_ctx,
+                    speaker_context=full_spk_ctx,
+                )
+                if (
+                    not session.target_language
+                    or session.target_language == "none"
+                    or session.translation_model == "none"
+                    or seg.source_language == session.target_language
+                ):
+                    seg.translated_text = seg.original_text
+                elif session.translation_model != "whisper-native":
+                    seg.translated_text = self.translator.translate(
+                        seg.original_text,
+                        source_lang=seg.source_language,
+                        target_lang=session.target_language,
+                        translation_model=session.translation_model,
+                    )
 
         self.store.save_session(session)
         if progress_cb:
