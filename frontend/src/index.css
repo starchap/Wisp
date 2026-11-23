@@ -78,8 +78,10 @@ html.theme-light .bg-slate-800,
 html.theme-light .bg-slate-800\/40,
 html.theme-light .bg-slate-800\/60,
 html.theme-light .bg-slate-800\/70,
+html.theme-light .bg-slate-800\/75,
 html.theme-light .bg-slate-800\/80,
-html.theme-light .bg-slate-800\/90 {
+html.theme-light .bg-slate-800\/90,
+html.theme-light .bg-slate-800\/95 {
   background-color: #f1f5f9 !important;
 }
 
@@ -108,6 +110,11 @@ html.theme-light .bg-emerald-950\/25 {
   border-color: #10b981 !important;
 }
 
+html.theme-light .bg-amber-950\/25 {
+  background-color: #fffbeb !important; /* Crisp light amber-50 */
+  border-color: #d97706 !important;
+}
+
 html.theme-light .bg-indigo-950\/25,
 html.theme-light .bg-indigo-600\/20 {
   background-color: #eef2ff !important; /* Crisp light indigo-50 */
@@ -125,6 +132,12 @@ html.theme-light .bg-emerald-600\/20 {
 html.theme-light .bg-emerald-500\/10,
 html.theme-light .bg-emerald-500\/15 {
   background-color: #ecfdf5 !important;
+}
+
+html.theme-light .bg-amber-500\/15,
+html.theme-light .bg-amber-500\/20 {
+  background-color: #fef3c7 !important; /* Crisp warm amber-100 */
+  border-color: #d97706 !important;
 }
 
 html.theme-light .bg-blue-500\/10,
@@ -176,11 +189,11 @@ html.theme-light .text-slate-500 {
 }
 
 /* Keep white text on solid primary buttons, convert other white text to deep slate-900 */
-html.theme-light .text-white:not(.bg-blue-600):not(.bg-blue-600 *):not(.bg-emerald-600):not(.bg-emerald-600 *):not(.bg-indigo-600):not(.bg-indigo-600 *):not(.bg-rose-600):not(.bg-rose-600 *):not(.bg-purple-600):not(.bg-purple-600 *):not(.bg-slate-700):not(.bg-slate-700 *) {
+html.theme-light .text-white:not(.bg-blue-600):not(.bg-blue-600 *):not(.bg-emerald-600):not(.bg-emerald-600 *):not(.bg-indigo-600):not(.bg-indigo-600 *):not(.bg-rose-600):not(.bg-rose-600 *):not(.bg-purple-600):not(.bg-purple-600 *):not(.bg-amber-600):not(.bg-amber-600 *):not(.bg-pink-600):not(.bg-pink-600 *):not(.bg-slate-700):not(.bg-slate-700 *) {
   color: #0f172a !important;
 }
 
-html.theme-light .hover\:text-white:hover:not(.bg-blue-600):not(.bg-emerald-600):not(.bg-indigo-600):not(.bg-rose-600) {
+html.theme-light .hover\:text-white:hover:not(.bg-blue-600):not(.bg-emerald-600):not(.bg-indigo-600):not(.bg-rose-600):not(.bg-amber-600):not(.bg-pink-600) {
   color: #0f172a !important;
 }
 
@@ -189,6 +202,13 @@ html.theme-light .text-emerald-200,
 html.theme-light .text-emerald-300,
 html.theme-light .text-emerald-400 {
   color: #047857 !important; /* Deep Emerald 700 for crisp legibility */
+}
+
+html.theme-light .text-amber-200,
+html.theme-light .text-amber-300,
+html.theme-light .text-amber-300\/90,
+html.theme-light .text-amber-400 {
+  color: #b45309 !important; /* Deep Amber 700 for crisp legibility */
 }
 
 html.theme-light .text-blue-200,
@@ -214,6 +234,8 @@ html.theme-light .bg-emerald-600 svg,
 html.theme-light .bg-indigo-600 svg,
 html.theme-light .bg-rose-600 svg,
 html.theme-light .bg-purple-600 svg,
+html.theme-light .bg-amber-600 svg,
+html.theme-light .bg-pink-600 svg,
 html.theme-light .bg-white\/20 svg {
   color: #ffffff !important;
 }

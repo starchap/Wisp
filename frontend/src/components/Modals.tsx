@@ -2006,11 +2006,11 @@ export const SessionDialogModal: React.FC<SessionDialogModalProps> = ({
                       onClick={() => toggleSpokenLanguage(lang.code)}
                       className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition flex items-center gap-1 ${
                         isActive
-                          ? 'bg-amber-500/20 border-amber-500 text-amber-200 shadow-sm'
-                          : 'bg-slate-900 border-slate-700/80 text-slate-400 hover:border-slate-600 hover:text-slate-200'
+                          ? 'bg-blue-600 border-blue-500 text-white shadow-sm'
+                          : 'bg-slate-900 border-slate-700/80 text-slate-300 hover:border-slate-600 hover:text-white'
                       }`}
                     >
-                      {isActive && <Check className="w-3 h-3 text-amber-400" />}
+                      {isActive && <Check className="w-3 h-3 text-white" />}
                       <span>
                         {lang.name.split(' ')[0]} ({lang.code.toUpperCase()})
                       </span>
