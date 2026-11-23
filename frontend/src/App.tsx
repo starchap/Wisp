@@ -544,66 +544,6 @@ export function App() {
       <div className="h-screen w-screen flex flex-col bg-slate-950 text-slate-100 overflow-hidden">
         {/* Top Bar */}
         <HeaderBar
-          session={activeSession}
-          languages={config?.languages || []}
-          whisperModels={config?.whisper_models || []}
-          clarificationModels={config?.clarification_models || []}
-          translationModels={config?.translation_models || []}
-          device={config?.device || 'cpu'}
-          computeType={config?.compute_type || 'int8'}
-          modelsStatus={modelsStatus}
-          onChangeTargetLanguage={async (langCode) => {
-            if (!activeSession) return;
-            const updated = await updateSession(activeSession.id, {
-              target_language: langCode,
-              translation_model:
-                langCode === 'none'
-                  ? 'none'
-                  : activeSession.translation_model === 'none'
-                  ? 'opus-mt-da-en'
-                  : activeSession.translation_model,
-              retranslate_existing: true,
-            });
-            setActiveSession(updated);
-          }}
-          onChangeWhisperModel={async (modelId) => {
-            if (!activeSession) return;
-            if (
-              activeSession.segments.length > 0 &&
-              activeSession.whisper_model !== modelId
-            ) {
-              setUploadProgress({
-                message: `Re-transcribing, clarifying & translating with ${modelId}...`,
-                percent: 8,
-              });
-            }
-            const updated = await updateSession(activeSession.id, {
-              whisper_model: modelId,
-            });
-            setActiveSession(updated);
-          }}
-          onChangeClarificationModel={async (modelId) => {
-            if (!activeSession) return;
-            const updated = await updateSession(activeSession.id, {
-              clarification_model: modelId,
-              retranslate_existing: true,
-            });
-            setActiveSession(updated);
-          }}
-          onChangeTranslationModel={async (modelId) => {
-            if (!activeSession) return;
-            const updated = await updateSession(activeSession.id, {
-              translation_model: modelId,
-              target_language:
-                modelId === 'none'
-                  ? 'none'
-                  : activeSession.target_language === 'none'
-                  ? defaultOutputLang || 'en'
-                  : activeSession.target_language,
-              retranslate_existing: true,
-            });
-            setActiveSession(updated);
-          }}
           onOpenSettingsModal={(tab = 'appearance') => {
             setSettingsTab(tab);
             setIsSettingsOpen(true);

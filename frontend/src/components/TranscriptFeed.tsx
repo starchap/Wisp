@@ -2,23 +2,18 @@ import React, { useState } from 'react';
 import {
   Check,
   Copy,
-  Download,
   Edit2,
   FileAudio,
   FolderOpen,
   Headphones,
   Languages,
-  MessageSquare,
   Mic,
   Play,
   Radio,
   RefreshCw,
   Square,
 } from 'lucide-react';
-import {
-  getSessionAudioDownloadUrl,
-  openSessionAudioFolder,
-} from '../api';
+import { openSessionAudioFolder } from '../api';
 import { useI18n } from '../i18n';
 import {
   AudioDevice,
@@ -166,50 +161,63 @@ export const TranscriptFeed: React.FC<TranscriptFeedProps> = ({
 
   return (
     <div className="flex-1 flex flex-col min-w-0 bg-slate-950/60 overflow-hidden">
-      {/* Clean Sub-toolbar: Plain Text Copy + Live Audio In/Out + Translated/Original Toggle + Start Live Listening */}
-      <div className="px-6 py-2 border-b border-slate-800/60 bg-slate-900/30 flex flex-wrap items-center justify-between gap-3 text-xs shrink-0 select-none">
-        <div className="flex items-center gap-2.5 text-slate-400">
-          <MessageSquare className="w-3.5 h-3.5 text-blue-400" />
-          <span>
-            {t('plainTextTranscript')} ({groupedTurns.length} {t('speakerTurns')})
-          </span>
-          {session.source_file_name && (
-            <span className="px-2 py-0.5 rounded-md bg-slate-800/80 border border-slate-700/70 text-[11px] text-slate-300 truncate max-w-[220px]">
-              {session.source_file_name}
-            </span>
-          )}
+      {/* Clean Sub-toolbar: [Original | Corrected | Translated] Tabs + Actions */}
+      <div className="px-6 py-2.5 border-b border-slate-800/60 bg-slate-900/30 flex flex-wrap items-center justify-between gap-3 text-xs shrink-0 select-none">
+        {/* Left: Clean 3-Tab Toggle: Original | Corrected | Translated (English) */}
+        <div className="flex items-center gap-1 bg-slate-900 p-1 rounded-xl border border-slate-800">
+          <button
+            type="button"
+            onClick={() => onChangeViewMode('original')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+              viewMode === 'original'
+                ? 'bg-blue-600 text-white shadow'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            {t('originalTab')}
+          </button>
 
-          {session.spoken_languages && session.spoken_languages.length > 0 && (
-            <span
-              className="px-2 py-0.5 rounded-md bg-amber-500/15 border border-amber-500/35 text-[10px] font-bold text-amber-300"
-              title="Defined Meeting Spoken Languages"
-            >
-              {session.spoken_languages.map((c) => c.toUpperCase()).join(' + ')}
-            </span>
-          )}
+          <button
+            type="button"
+            onClick={() => onChangeViewMode('corrected')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+              viewMode === 'corrected'
+                ? 'bg-blue-600 text-white shadow'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            {t('correctedTab')}
+          </button>
 
+          <button
+            type="button"
+            onClick={() => onChangeViewMode('translated')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+              viewMode === 'translated'
+                ? 'bg-blue-600 text-white shadow'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Languages className="w-3.5 h-3.5" />
+            <span>
+              {t('translated')}
+              {targetLangLabel ? ` (${targetLangLabel})` : ''}
+            </span>
+          </button>
+        </div>
+
+        {/* Right Controls: Open Folder + Copy for Word + Re-transcribe + Live Audio In/Out */}
+        <div className="flex flex-wrap items-center gap-2">
           {(session.duration > 0 || session.segments.length > 0) && (
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => openSessionAudioFolder(session.id).catch(() => {})}
-                className="flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-700/80 text-slate-200 border border-slate-700/70 text-[11px] font-medium transition"
-                title="Open folder where this session's audio (.wav) and transcript are saved"
-              >
-                <FolderOpen className="w-3.5 h-3.5 text-amber-400" />
-                <span>Open Folder</span>
-              </button>
-
-              <a
-                href={getSessionAudioDownloadUrl(session.id)}
-                download
-                className="flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-700/80 text-slate-200 border border-slate-700/70 text-[11px] font-medium transition"
-                title="Download recorded session audio (.wav)"
-              >
-                <Download className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Download .WAV</span>
-              </a>
-            </div>
+            <button
+              type="button"
+              onClick={() => openSessionAudioFolder(session.id).catch(() => {})}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-700/80 text-slate-200 border border-slate-700/70 text-xs font-medium transition"
+              title="Open folder where this session's audio and transcript are saved"
+            >
+              <FolderOpen className="w-3.5 h-3.5 text-amber-400" />
+              <span>Open Folder</span>
+            </button>
           )}
 
           {session.segments.length > 0 && (
@@ -217,7 +225,7 @@ export const TranscriptFeed: React.FC<TranscriptFeedProps> = ({
               <button
                 type="button"
                 onClick={handleCopyForWord}
-                className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 font-semibold transition ml-2"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 font-semibold transition"
               >
                 {copiedWord ? (
                   <>
@@ -236,7 +244,7 @@ export const TranscriptFeed: React.FC<TranscriptFeedProps> = ({
                 <button
                   type="button"
                   onClick={onReprocessSession}
-                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-600/15 hover:bg-blue-600/25 text-blue-300 border border-blue-500/30 font-semibold transition"
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-blue-600/15 hover:bg-blue-600/25 text-blue-300 border border-blue-500/30 font-semibold transition"
                   title={t('retranscribeOnSave')}
                 >
                   <RefreshCw className="w-3.5 h-3.5 text-blue-400" />
@@ -245,10 +253,7 @@ export const TranscriptFeed: React.FC<TranscriptFeedProps> = ({
               )}
             </>
           )}
-        </div>
 
-        {/* Right Controls: [Live Audio In/Out] -> [Translated | Original Spoken] -> [Start Live Listening] */}
-        <div className="flex flex-wrap items-center gap-2.5">
           {isLiveSession && (
             <>
               <div className="flex items-center gap-2 bg-slate-800/80 border border-slate-700/70 rounded-xl px-2.5 py-1">
@@ -308,49 +313,6 @@ export const TranscriptFeed: React.FC<TranscriptFeedProps> = ({
               </div>
             </>
           )}
-
-          {/* Clean 3-Tab Toggle: Original | Corrected | Translated (English) */}
-          <div className="flex items-center gap-1 bg-slate-900 p-1 rounded-xl border border-slate-800">
-            <button
-              type="button"
-              onClick={() => onChangeViewMode('original')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
-                viewMode === 'original'
-                  ? 'bg-blue-600 text-white shadow'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              {t('originalTab')}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => onChangeViewMode('corrected')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
-                viewMode === 'corrected'
-                  ? 'bg-blue-600 text-white shadow'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              {t('correctedTab')}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => onChangeViewMode('translated')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
-                viewMode === 'translated'
-                  ? 'bg-blue-600 text-white shadow'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Languages className="w-3.5 h-3.5" />
-              <span>
-                {t('translated')}
-                {targetLangLabel ? ` (${targetLangLabel})` : ''}
-              </span>
-            </button>
-          </div>
 
           {isLiveSession && (
             <>

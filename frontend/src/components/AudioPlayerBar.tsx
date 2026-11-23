@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  Download,
   FolderOpen,
   Pause,
   Play,
@@ -9,10 +8,7 @@ import {
   Volume2,
   VolumeX,
 } from 'lucide-react';
-import {
-  getSessionAudioDownloadUrl,
-  openSessionAudioFolder,
-} from '../api';
+import { openSessionAudioFolder } from '../api';
 import { MeetingSession, TranscriptSegment } from '../types';
 
 interface AudioPlayerBarProps {
@@ -232,27 +228,15 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
             </button>
 
             {session && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => openSessionAudioFolder(session.id).catch(() => {})}
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200 border border-slate-700 transition"
-                  title="Open audio file location in Explorer / Finder"
-                >
-                  <FolderOpen className="w-3.5 h-3.5 text-amber-400" />
-                  <span className="hidden sm:inline">Folder</span>
-                </button>
-
-                <a
-                  href={getSessionAudioDownloadUrl(session.id)}
-                  download
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200 border border-slate-700 transition"
-                  title="Download recorded audio (.wav)"
-                >
-                  <Download className="w-3.5 h-3.5 text-emerald-400" />
-                  <span className="hidden sm:inline">.WAV</span>
-                </a>
-              </>
+              <button
+                type="button"
+                onClick={() => openSessionAudioFolder(session.id).catch(() => {})}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200 border border-slate-700 transition"
+                title="Open audio file location in Explorer / Finder"
+              >
+                <FolderOpen className="w-3.5 h-3.5 text-amber-400" />
+                <span className="hidden sm:inline">Folder</span>
+              </button>
             )}
           </div>
         </footer>
