@@ -629,15 +629,22 @@ class LocalContextClarifierEngine:
                 (r"\btrots\b", "trods"),
                 (r"\bkulturforskilderne\b", "kulturforskellene"),
                 (r"\bkulturforskildende\b", "kulturforskellene"),
-                (r"\bKronprinspaaret\b", "Kronprinsparret"),
-                (r"\bKronprinsparet\b", "Kronprinsparret"),
+                (r"\bkulturforskeerne\b", "kulturforskellene"),
+                (r"\b[Kk]ronprinspaaret\b", "Kronprinsparret"),
+                (r"\b[Kk]ronprinsparet\b", "Kronprinsparret"),
+                (r"\b[Kk]ongefamilens\b", "Kongefamiliens"),
                 (r"\bKong\s+i\s+familien\s+[Ss]poli\b", "Kongefamiliens bolig"),
                 (r"\bKong\s*i\s*familien'?s?\s+bolig\b", "Kongefamiliens bolig"),
                 (r"\bMalienborg\b", "Amalienborg"),
+                (r"\bMaljenborg\b", "Amalienborg"),
                 (r"\bmedhensyn\b", "med hensyn"),
+                (r"\bved\s+hensyn\s+til\b", "med hensyn til"),
                 (r"\bbegage\b", "bagage"),
                 (r"\bpædens\s+små\s+prinser\b", "parrets små prinser"),
+                (r"\bparens\s+små\s+prinser\b", "parrets små prinser"),
+                (r"\bto\s+værtener\b", "to verdener"),
                 (r"\bbrenner\b", "brænder"),
+                (r"\bDen\s+kulturar\b", "Den kulturarv"),
                 (r"(?i)^(-\s*)?decoration\b", r"\1Dekoration"),
             ]
             for pat, repl in general_da_fixes:
@@ -651,10 +658,13 @@ class LocalContextClarifierEngine:
                 for kw in (
                     "amalienborg",
                     "malienborg",
+                    "maljenborg",
                     "kronprins",
                     "kongefamilie",
+                    "kongefamilen",
                     "palæ",
                     "palais",
+                    "frederik den 8",
                     "prinser",
                     "prinsesser",
                     "bygninger",
@@ -664,10 +674,15 @@ class LocalContextClarifierEngine:
                 royal_home_fixes = [
                     # "i stedet satte deres hjem" / "i stand satte deres hjem" -> "istandsatte deres hjem"
                     (r"\bi\s+(?:stedet|stand)\s+satte\s+deres\s+hjem\b", "istandsatte deres hjem"),
-                    # "fra den Ordnes Palais" / "fra den ordnes palæ" -> ", Frederik VIII's Palæ"
+                    # "fra den Ordnes Palais" / "fra den ordnes palæ" / "fra Ahtnes Palais" -> ", Frederik VIII's Palæ"
                     (
-                        r"(?:,?\s*)\bfra\s+den\s+[Oo]rdnes\s+[Pp]al(?:æ|ais|e)\b",
+                        r"(?:,?\s*)\bfra\s+(?:den\s+)?(?:[Oo]rdnes|[Aa]htnes)\s+[Pp]al(?:æ|ais|e)\b",
                         ", Frederik VIII's Palæ",
+                    ),
+                    # "deres hjem, Frederik den 8." -> "deres hjem, Frederik VIII's Palæ."
+                    (
+                        r"\bderes\s+hjem,\s*Frederik\s+den\s+8\.?(?!\s*['s]*\s*Palæ)",
+                        "deres hjem, Frederik VIII's Palæ.",
                     ),
                     # "blive både i" (in context of old buildings/home in Denmark) -> "blive boende i"
                     (r"\bat\s+blive\s+både\s+i\b", "at blive boende i"),
@@ -678,12 +693,13 @@ class LocalContextClarifierEngine:
             # When the speaker or conversation references Australia ("Australien", "Australia", "land, hvor deres mor kommer fra")
             is_australia_ctx = any(
                 kw in combined_ctx
-                for kw in ("australien", "australia", " kommer fra", "to verdener")
+                for kw in ("australien", "australia", " kommer fra", "to verdener", "to værtener")
             )
             if is_australia_ctx:
                 aus_fixes = [
                     (r"\bAustralia\b", "Australien"),
                     (r"\bAmar-Australien\b", "Australien"),
+                    (r"\bnæste\s+her\s+strage\s+her\b", "næste gang til Australien"),
                 ]
                 for pat, repl in aus_fixes:
                     out = re.sub(pat, repl, out)
@@ -1506,6 +1522,9 @@ class LocalSpeechPipeline:
 
         if progress_cb:
             progress_cb("Diarizing speakers (recognizing distinct voices)...", 55)
+        seg_times = self.diarizer.split_segments_on_speaker_change(
+            audio_16k, seg_times
+        )
         speaker_ids, centroids = self.diarizer.cluster_segments_batch(
             audio_16k, seg_times, num_speakers=num_speakers
         )
@@ -1732,16 +1751,15 @@ class LocalSpeechPipeline:
         `spoken_languages`, and `target_language`
         (preserving speaker profiles, names, and per-speaker spoken languages).
         """
-        if not session.segments:
-            audio_path = self.store.get_audio_path(session.id)
-            if audio_path.exists():
-                audio_16k = self.store.read_audio_slice(
-                    session.id, 0.0, max(1.0, session.duration or 3600.0)
+        audio_path = self.store.get_audio_path(session.id)
+        if not session.segments and audio_path.exists():
+            audio_16k = self.store.read_audio_slice(
+                session.id, 0.0, max(1.0, session.duration or 3600.0)
+            )
+            if len(audio_16k) > 0:
+                return self.process_uploaded_file(
+                    session, audio_16k, progress_cb=progress_cb
                 )
-                if len(audio_16k) > 0:
-                    return self.process_uploaded_file(
-                        session, audio_16k, progress_cb=progress_cb
-                    )
             return session
 
         if progress_cb:
@@ -1750,6 +1768,61 @@ class LocalSpeechPipeline:
                 10,
             )
         resolve_local_whisper_model(session.whisper_model)
+
+        # If the full session recording is on disk and this is a file session,
+        # check if any long segment (>= 3.6s) contains an unsplit intra-segment speaker change
+        # and split + reassign speaker IDs using existing session voice centroids.
+        if session.session_type == "file" and audio_path.exists() and session.embeddings:
+            full_audio_16k = self.store.read_audio_slice(
+                session.id, 0.0, max(1.0, session.duration or 3600.0)
+            )
+            if len(full_audio_16k) > int(SAMPLE_RATE * 1.0):
+                cur_times = [(seg.start, seg.end) for seg in session.segments]
+                refined_times = self.diarizer.split_segments_on_speaker_change(
+                    full_audio_16k, cur_times
+                )
+                if len(refined_times) != len(cur_times):
+                    new_segments: List[TranscriptSegment] = []
+                    centroids_np = {
+                        spk_id: np.array(vec, dtype=np.float32)
+                        for spk_id, vec in session.embeddings.items()
+                    }
+                    for s_sec, e_sec in refined_times:
+                        clip = full_audio_16k[
+                            int(s_sec * SAMPLE_RATE) : int(e_sec * SAMPLE_RATE)
+                        ]
+                        emb = self.diarizer.extract_embedding(clip)
+                        best_spk = "speaker_1"
+                        best_sim = -2.0
+                        if emb is not None and centroids_np:
+                            for spk_id, c_vec in centroids_np.items():
+                                if c_vec.shape == emb.shape:
+                                    sim = float(
+                                        np.dot(emb, c_vec)
+                                        / max(
+                                            1e-8,
+                                            float(
+                                                np.linalg.norm(emb)
+                                                * np.linalg.norm(c_vec)
+                                            ),
+                                        )
+                                    )
+                                    if sim > best_sim:
+                                        best_sim = sim
+                                        best_spk = spk_id
+                        new_segments.append(
+                            TranscriptSegment(
+                                id=uuid.uuid4().hex[:10],
+                                speaker_id=best_spk,
+                                start=round(s_sec, 2),
+                                end=round(e_sec, 2),
+                                source_language="da",
+                                original_text="",
+                                translated_text="",
+                                target_language=session.target_language,
+                            )
+                        )
+                    session.segments = new_segments
 
         total = len(session.segments)
         for idx, seg in enumerate(session.segments):

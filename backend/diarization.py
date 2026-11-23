@@ -247,6 +247,81 @@ class LocalSpeakerDiarizer:
         session_embeddings[new_spk_id] = emb.tolist()
         return new_spk_id, session_embeddings
 
+    def split_segments_on_speaker_change(
+        self,
+        full_audio_16k: np.ndarray,
+        segments_times: List[Tuple[float, float]],
+        win_sec: float = 1.6,
+        hop_sec: float = 0.8,
+        change_sim_thresh: float = 0.22,
+    ) -> List[Tuple[float, float]]:
+        """
+        Detect intra-segment speaker changes in continuous TV/interview/meeting audio
+        where one person finishes speaking and another person starts with <0.4s silence.
+        Splits any segment >= 3.6s where the sliding-window 3D-Speaker voice embedding
+        shifts abruptly (cosine similarity < `change_sim_thresh`), snapping the cut point
+        to the local minimum acoustic energy within ±0.40s.
+        """
+        if not segments_times or len(full_audio_16k) == 0:
+            return segments_times
+
+        total_dur = len(full_audio_16k) / float(SAMPLE_RATE)
+        refined: List[Tuple[float, float]] = []
+
+        for s_sec, e_sec in segments_times:
+            dur = e_sec - s_sec
+            if dur < 3.6:
+                refined.append((s_sec, e_sec))
+                continue
+
+            times: List[float] = []
+            embs: List[np.ndarray] = []
+            t = s_sec
+            while t + win_sec <= e_sec + 0.05:
+                c_start = max(0, int(t * SAMPLE_RATE))
+                c_end = min(len(full_audio_16k), int((t + win_sec) * SAMPLE_RATE))
+                clip = full_audio_16k[c_start:c_end]
+                if len(clip) >= int(SAMPLE_RATE * 0.4) and float(np.sqrt(np.mean(clip**2))) >= 0.008:
+                    emb = self.extract_embedding(clip)
+                    if emb is not None:
+                        times.append(t + win_sec / 2.0)
+                        embs.append(emb)
+                t += hop_sec
+
+            if len(embs) < 3:
+                refined.append((s_sec, e_sec))
+                continue
+
+            cur_start = s_sec
+            last_split_idx = 0
+            for i in range(1, len(embs) - 1):
+                if (times[i] - cur_start) < 1.8 or (e_sec - times[i]) < 1.8:
+                    continue
+                prev_mean = np.mean(embs[max(last_split_idx, i - 2) : i], axis=0)
+                next_mean = np.mean(embs[i : min(len(embs), i + 2)], axis=0)
+                sim = _cosine_similarity(prev_mean, next_mean)
+                if sim < change_sim_thresh:
+                    search_s = max(cur_start + 1.2, times[i] - 0.40)
+                    search_e = min(e_sec - 1.2, times[i] + 0.40)
+                    best_t = round(float(times[i]), 2)
+                    min_e = 999.0
+                    for cand_t in np.arange(search_s, search_e, 0.05):
+                        w_s = max(0, int((cand_t - 0.05) * SAMPLE_RATE))
+                        w_e = min(len(full_audio_16k), int((cand_t + 0.05) * SAMPLE_RATE))
+                        w = full_audio_16k[w_s:w_e]
+                        if len(w) > 0:
+                            e_val = float(np.sqrt(np.mean(w**2)))
+                            if e_val < min_e:
+                                min_e = e_val
+                                best_t = round(min(total_dur, max(0.0, float(cand_t))), 2)
+                    if (best_t - cur_start) >= 1.0 and (e_sec - best_t) >= 1.0:
+                        refined.append((cur_start, best_t))
+                        cur_start = best_t
+                        last_split_idx = i
+            refined.append((cur_start, e_sec))
+
+        return refined
+
     def cluster_segments_batch(
         self,
         full_audio_16k: np.ndarray,
