@@ -1665,12 +1665,13 @@ class LocalSpeechPipeline:
         if progress_cb:
             progress_cb("Saving normalized audio for playback...", 10)
         self.store.write_full_audio(session.id, audio_16k)
+        self.store.save_session(session)
 
         if progress_cb:
             progress_cb(
                 f"Preparing local Whisper ONNX ({session.whisper_model}) model...", 20
             )
-        resolve_local_whisper_model(session.whisper_model)
+        self._get_whisper_runner(session.whisper_model)
 
         if progress_cb:
             progress_cb("Detecting speech segments across recording...", 35)
@@ -1930,7 +1931,7 @@ class LocalSpeechPipeline:
                 f"Loading Whisper ({session.whisper_model}), Clarifier ({session.clarification_model}) & Translator ({session.translation_model})...",
                 10,
             )
-        resolve_local_whisper_model(session.whisper_model)
+        self._get_whisper_runner(session.whisper_model)
 
         # If the full session recording is on disk and this is a file session,
         # check if any long segment (>= 3.6s) contains an unsplit intra-segment speaker change

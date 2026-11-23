@@ -142,18 +142,10 @@ const FALLBACK_MODELS_STATUS: ModelsStatus = {
     },
     {
       id: 'hviske-v2-int8',
-      name: 'Hviske v2 High-Precision — Danish Specialist (CoRal Whisper Large-v3 INT8, ~1.62 GB)',
+      name: 'Hviske v2 High-Precision — Danish Specialist (CoRal Whisper Large-v3 INT8, ~1.35 GB)',
       description:
-        'Higher-precision 8-bit quantized Hviske v2 Danish Specialist for sharper Danish word endings, names, and complex interviews.',
-      size_mb: '1625',
-      downloaded: false,
-    },
-    {
-      id: 'hviske-v2-fp16',
-      name: 'Hviske v2 Ultra — Danish Specialist (CoRal Whisper Large-v3 FP16, ~3.22 GB)',
-      description:
-        'Uncompressed 16-bit Hviske v2 Danish Specialist (3.22 GB) delivering the maximum possible Danish transcription accuracy.',
-      size_mb: '3222',
+        'Higher-precision 8-bit decoder Hviske v2 Danish Specialist for sharper Danish word endings, names, and complex interviews.',
+      size_mb: '1345',
       downloaded: false,
     },
     {

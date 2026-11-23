@@ -221,38 +221,40 @@ export const TranscriptFeed: React.FC<TranscriptFeedProps> = ({
           )}
 
           {session.segments.length > 0 && (
-            <>
+            <button
+              type="button"
+              onClick={handleCopyForWord}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 font-semibold transition"
+            >
+              {copiedWord ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>{t('copiedForWord')}</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3.5 h-3.5" />
+                  <span>{t('copyForWord')}</span>
+                </>
+              )}
+            </button>
+          )}
+
+          {(session.segments.length > 0 ||
+            session.duration > 0 ||
+            !!session.source_file_name) &&
+            onReprocessSession &&
+            !isRecording && (
               <button
                 type="button"
-                onClick={handleCopyForWord}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 font-semibold transition"
+                onClick={onReprocessSession}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-blue-600/15 hover:bg-blue-600/25 text-blue-300 border border-blue-500/30 font-semibold transition"
+                title={t('retranscribeOnSave')}
               >
-                {copiedWord ? (
-                  <>
-                    <Check className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>{t('copiedForWord')}</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-3.5 h-3.5" />
-                    <span>{t('copyForWord')}</span>
-                  </>
-                )}
+                <RefreshCw className="w-3.5 h-3.5 text-blue-400" />
+                <span>{t('retranscribeBtn')}</span>
               </button>
-
-              {onReprocessSession && !isRecording && (
-                <button
-                  type="button"
-                  onClick={onReprocessSession}
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-blue-600/15 hover:bg-blue-600/25 text-blue-300 border border-blue-500/30 font-semibold transition"
-                  title={t('retranscribeOnSave')}
-                >
-                  <RefreshCw className="w-3.5 h-3.5 text-blue-400" />
-                  <span>{t('retranscribeBtn')}</span>
-                </button>
-              )}
-            </>
-          )}
+            )}
 
           {isLiveSession && (
             <>
@@ -410,6 +412,40 @@ export const TranscriptFeed: React.FC<TranscriptFeedProps> = ({
                 <p className="text-xs text-slate-400 leading-relaxed max-w-md">
                   {t('readyForLiveDesc')}
                 </p>
+              </div>
+            ) : session.duration > 0 || !!session.source_file_name ? (
+              <div className="w-full rounded-2xl border border-slate-800 bg-slate-900/50 p-10 flex flex-col items-center">
+                <div className="w-14 h-14 rounded-2xl bg-blue-600/20 border border-blue-500/30 flex items-center justify-center mb-4 text-blue-400">
+                  <FileAudio className="w-7 h-7" />
+                </div>
+                <h3 className="text-base font-bold text-white mb-1">
+                  {session.source_file_name || session.title}
+                </h3>
+                <p className="text-xs text-slate-400 leading-relaxed mb-5 max-w-md">
+                  Audio file is loaded and ready. Click below to run local AI
+                  transcription, or edit session settings to choose another
+                  model.
+                </p>
+                <div className="flex flex-wrap items-center justify-center gap-3">
+                  {onReprocessSession && (
+                    <button
+                      type="button"
+                      onClick={onReprocessSession}
+                      className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-lg shadow-blue-600/25 transition"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>{t('retranscribeBtn')}</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={onOpenEditSession}
+                    className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition"
+                  >
+                    <Edit2 className="w-3.5 h-3.5" />
+                    <span>{t('editSessionModelsBtn')}</span>
+                  </button>
+                </div>
               </div>
             ) : (
               <div

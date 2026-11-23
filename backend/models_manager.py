@@ -127,12 +127,16 @@ def hf_hub_download(repo_id: str, filename: str, local_dir: str) -> str:
 def get_whisper_model_dir(model_id: str) -> Path:
     if model_id == "large-v3-turbo":
         model_id = "turbo"
+    elif model_id == "hviske-v2-fp16":
+        model_id = "hviske-v2-int8"
     return config.MODELS_DIR / f"whisper-onnx-{model_id}"
 
 
 def get_whisper_onnx_paths(model_id: str) -> Dict[str, Path]:
     if model_id == "large-v3-turbo":
         model_id = "turbo"
+    elif model_id == "hviske-v2-fp16":
+        model_id = "hviske-v2-int8"
     info = WHISPER_MAP.get(model_id, WHISPER_MAP[DEFAULT_WHISPER_MODEL])
     d = get_whisper_model_dir(model_id)
     if info.get("engine") == "hf-whisper-onnx":
