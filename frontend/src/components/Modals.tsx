@@ -130,6 +130,14 @@ const FALLBACK_MODELS_STATUS: ModelsStatus = {
       size_mb: '1065',
       downloaded: false,
     },
+    {
+      id: 'roest-315m',
+      name: 'Røst 315M — Danish Fast Acoustic Specialist (CoRal Wav2Vec2, ~303 MB)',
+      description:
+        'Ultra-fast native Danish acoustic speech recognizer (Alexandra Instituttet / CoRal project) trained purely on Danish speech.',
+      size_mb: '303',
+      downloaded: false,
+    },
   ],
   clarification_models: [
     {

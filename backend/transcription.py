@@ -629,14 +629,20 @@ class LocalContextClarifierEngine:
                 (r"\btrots\b", "trods"),
                 (r"\bkulturforskilderne\b", "kulturforskellene"),
                 (r"\bkulturforskildende\b", "kulturforskellene"),
+                (r"\bkulturforskellende\b", "kulturforskellene"),
                 (r"\bkulturforskeerne\b", "kulturforskellene"),
                 (r"\b[Kk]ronprinspaaret\b", "Kronprinsparret"),
                 (r"\b[Kk]ronprinsparet\b", "Kronprinsparret"),
+                (r"\b[Kk]ronprinsparrede\b", "Kronprinsparret"),
+                (r"\b[Kk]ronprinsparret\b", "Kronprinsparret"),
                 (r"\b[Kk]ongefamilens\b", "Kongefamiliens"),
+                (r"\b[Kk]ongefamiliens\b", "Kongefamiliens"),
                 (r"\bKong\s+i\s+familien\s+[Ss]poli\b", "Kongefamiliens bolig"),
                 (r"\bKong\s*i\s*familien'?s?\s+bolig\b", "Kongefamiliens bolig"),
-                (r"\bMalienborg\b", "Amalienborg"),
-                (r"\bMaljenborg\b", "Amalienborg"),
+                (r"\b[Mm]alienborg\b", "Amalienborg"),
+                (r"\b[Mm]aljenborg\b", "Amalienborg"),
+                (r"\b[Aa]malienborg\b", "Amalienborg"),
+                (r"\b[Dd]anmark\b", "Danmark"),
                 (r"\bmedhensyn\b", "med hensyn"),
                 (r"\bved\s+hensyn\s+til\b", "med hensyn til"),
                 (r"\bbegage\b", "bagage"),
@@ -672,8 +678,10 @@ class LocalContextClarifierEngine:
             )
             if is_palace_or_royal_ctx:
                 royal_home_fixes = [
-                    # "i stedet satte deres hjem" / "i stand satte deres hjem" -> "istandsatte deres hjem"
-                    (r"\bi\s+(?:stedet|stand)\s+satte\s+deres\s+hjem\b", "istandsatte deres hjem"),
+                    # "i stedet satte deres hjem" / "i stand satte deres hjem" / "i standsatte deres hjem" -> "istandsatte deres hjem"
+                    (r"\bi\s+(?:stedet\s+satte|stand\s+satte|standsatte)\s+deres\s+hjem\b", "istandsatte deres hjem"),
+                    # "frederik 8s palæ" / "frederik ottnes palé" -> "Frederik VIII's Palæ"
+                    (r"\b[Ff]rederik\s+(?:8\.?s|ottnes|ottendes)\s+[Pp]al(?:æ|é|ais|e)\b", "Frederik VIII's Palæ"),
                     # "fra den Ordnes Palais" / "fra den ordnes palæ" / "fra Ahtnes Palais" -> ", Frederik VIII's Palæ"
                     (
                         r"(?:,?\s*)\bfra\s+(?:den\s+)?(?:[Oo]rdnes|[Aa]htnes)\s+[Pp]al(?:æ|ais|e)\b",
@@ -959,16 +967,19 @@ def _whisper_log_mel_spectrogram(audio_16k: np.ndarray, n_mels: int = 80) -> np.
 
 class WhisperONNXRunner:
     """
-    Runs Whisper ONNX encoder + decoder directly via Microsoft's signed `onnxruntime.InferenceSession`.
-    Supports both:
+    Runs Speech-to-Text ONNX models directly via Microsoft's signed `onnxruntime.InferenceSession`.
+    Supports:
     - Standard `sherpa-onnx` Whisper INT8 models (`tiny`, `base`, `small`, `medium`, `turbo`)
     - Specialized Danish HuggingFace/Optimum Whisper ONNX models (`hviske-v2` — Syv.ai / CoRal Whisper Large-v3)
+    - Specialized Danish Wav2Vec2 CTC ONNX models (`roest-315m` — Alexandra Instituttet / CoRal Røst 315M)
     """
 
     def __init__(self, model_id: str):
         self.model_id = model_id
         paths = resolve_local_whisper_model(model_id)
-        self.is_hf_onnx = "engine" in paths and str(paths["engine"]) == "hf-whisper-onnx"
+        engine_str = str(paths.get("engine", ""))
+        self.is_hf_onnx = engine_str == "hf-whisper-onnx"
+        self.is_wav2vec2_onnx = engine_str == "wav2vec2-onnx"
         sess_opts = ort.SessionOptions()
         sess_opts.intra_op_num_threads = 4
         self.encoder = ort.InferenceSession(
@@ -976,6 +987,15 @@ class WhisperONNXRunner:
             sess_options=sess_opts,
             providers=["CPUExecutionProvider"],
         )
+        if self.is_wav2vec2_onnx:
+            self.decoder = None
+            vocab_raw = json.loads(paths["tokens"].read_text(encoding="utf-8"))
+            self.w2v_inv_vocab: Dict[int, str] = {int(v): k for k, v in vocab_raw.items()}
+            self.is_multilingual = False
+            self.tokens_map = {}
+            self._by_first_byte = {}
+            return
+
         self.decoder = ort.InferenceSession(
             str(paths["decoder"]),
             sess_options=sess_opts,
@@ -1055,7 +1075,7 @@ class WhisperONNXRunner:
 
     def encode_prompt_text(self, text_str: str, max_tokens: int = 56) -> List[int]:
         """Encode preceding conversation context string into Whisper token IDs for `<|startofprev|>`."""
-        if not text_str or not text_str.strip():
+        if not text_str or not text_str.strip() or self.is_wav2vec2_onnx:
             return []
         if self.is_hf_onnx:
             return self.hf_tokenizer.encode(" " + text_str.strip(), add_special_tokens=False).ids[-max_tokens:]
@@ -1076,6 +1096,14 @@ class WhisperONNXRunner:
         return out[-max_tokens:]
 
     def encode_audio(self, audio_16k: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        if self.is_wav2vec2_onnx:
+            if len(audio_16k) < 400:
+                audio_16k = np.pad(audio_16k, (0, 400 - len(audio_16k)))
+            norm_a = (audio_16k - float(np.mean(audio_16k))) / float(np.std(audio_16k) + 1e-7)
+            logits = self.encoder.run(
+                None, {"input_values": norm_a[None, :].astype(np.float32)}
+            )[0]
+            return logits, logits
         if self.is_hf_onnx:
             padded = np.zeros(480000, dtype=np.float32)
             n_copy = min(480000, len(audio_16k))
@@ -1093,8 +1121,8 @@ class WhisperONNXRunner:
         cross_v: np.ndarray,
         allowed_languages: Optional[List[str]] = None,
     ) -> str:
-        if self.is_hf_onnx:
-            # Hviske v2 is a specialized Danish ASR model
+        if self.is_hf_onnx or self.is_wav2vec2_onnx:
+            # Hviske v2 and Røst 315M are specialized Danish ASR models
             if allowed_languages and len(allowed_languages) == 1:
                 return allowed_languages[0]
             return "da"
@@ -1138,6 +1166,24 @@ class WhisperONNXRunner:
         duration_sec: float = 10.0,
         context_prompt: Optional[str] = None,
     ) -> str:
+        if self.is_wav2vec2_onnx:
+            logits = cross_k
+            pred_ids = np.argmax(logits[0], axis=-1)
+            chars: List[str] = []
+            prev_id = -1
+            for pid in pred_ids:
+                pid_i = int(pid)
+                if pid_i != prev_id:
+                    ch = self.w2v_inv_vocab.get(pid_i, "")
+                    if ch and ch not in ("<pad>", "<s>", "</s>", "<unk>"):
+                        chars.append(" " if ch == "|" else ch)
+                prev_id = pid_i
+            text_out = re.sub(r"\s+", " ", "".join(chars)).strip()
+            if text_out and text_out[0].islower():
+                text_out = text_out[0].upper() + text_out[1:]
+            if text_out and text_out[-1] not in ".?!…":
+                text_out += "."
+            return text_out
         if self.is_hf_onnx:
             hidden = cross_k
             lang_id = self.lang_to_id.get(language, self.lang_to_id.get("da", 50285))

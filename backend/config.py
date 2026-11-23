@@ -127,6 +127,15 @@ WHISPER_MODELS: List[Dict[str, str]] = [
         "prefix": "hviske-v2",
         "engine": "hf-whisper-onnx",
     },
+    {
+        "id": "roest-315m",
+        "name": "Røst 315M — Danish Fast Acoustic Specialist (CoRal Wav2Vec2, ~303 MB)",
+        "description": "Ultra-fast native Danish acoustic speech recognizer (Alexandra Instituttet / CoRal project) trained purely on Danish speech.",
+        "size_mb": "303",
+        "hf_repo": "PierreMesure/roest-315m-onnx",
+        "prefix": "roest-315m",
+        "engine": "wav2vec2-onnx",
+    },
 ]
 
 DEFAULT_WHISPER_MODEL = "small"

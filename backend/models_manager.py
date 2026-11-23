@@ -114,6 +114,14 @@ def get_whisper_onnx_paths(model_id: str) -> Dict[str, Path]:
             "tokens": d / "tokenizer.json",
             "engine": Path("hf-whisper-onnx"),
         }
+    if info.get("engine") == "wav2vec2-onnx":
+        return {
+            "dir": d,
+            "encoder": d / "onnx" / "model_quantized.onnx",
+            "decoder": d / "onnx" / "model_quantized.onnx",
+            "tokens": d / "vocab.json",
+            "engine": Path("wav2vec2-onnx"),
+        }
     prefix = info["prefix"]
     return {
         "dir": d,
@@ -270,6 +278,17 @@ def ensure_whisper_model(model_id: str = DEFAULT_WHISPER_MODEL) -> Dict[str, Pat
             "tokenizer_config.json",
             "onnx/encoder_model_q4.onnx",
             "onnx/decoder_model_merged_q4.onnx",
+        ]
+    elif info.get("engine") == "wav2vec2-onnx":
+        files_to_fetch = [
+            "config.json",
+            "preprocessor_config.json",
+            "tokenizer.json",
+            "tokenizer_config.json",
+            "vocab.json",
+            "added_tokens.json",
+            "special_tokens_map.json",
+            "onnx/model_quantized.onnx",
         ]
     else:
         prefix = info["prefix"]
