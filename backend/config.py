@@ -112,11 +112,20 @@ WHISPER_MODELS: List[Dict[str, str]] = [
     },
     {
         "id": "turbo",
-        "name": "Whisper Large-v3-Turbo (~1.6 GB) — Best Danish Quality",
+        "name": "Whisper Large-v3-Turbo (~1.6 GB) — Best Multilingual Quality",
         "description": "Tip-top Large-v3 Danish & multilingual accuracy at fast real-time speed.",
         "size_mb": "1600",
         "hf_repo": "csukuangfj/sherpa-onnx-whisper-turbo",
         "prefix": "turbo",
+    },
+    {
+        "id": "hviske-v2",
+        "name": "Hviske v2 — Danish Specialist (CoRal Whisper Large-v3, ~1.06 GB)",
+        "description": "Specialized Danish Speech-to-Text model (Syv.ai / CoRal) fine-tuned specifically on Danish dialects, compound words, and landmarks.",
+        "size_mb": "1065",
+        "hf_repo": "varsan-g/hviske-v2-onnx",
+        "prefix": "hviske-v2",
+        "engine": "hf-whisper-onnx",
     },
 ]
 

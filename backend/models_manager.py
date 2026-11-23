@@ -105,8 +105,16 @@ def get_whisper_onnx_paths(model_id: str) -> Dict[str, Path]:
     if model_id == "large-v3-turbo":
         model_id = "turbo"
     info = WHISPER_MAP.get(model_id, WHISPER_MAP[DEFAULT_WHISPER_MODEL])
-    prefix = info["prefix"]
     d = get_whisper_model_dir(model_id)
+    if info.get("engine") == "hf-whisper-onnx":
+        return {
+            "dir": d,
+            "encoder": d / "onnx" / "encoder_model_q4.onnx",
+            "decoder": d / "onnx" / "decoder_model_merged_q4.onnx",
+            "tokens": d / "tokenizer.json",
+            "engine": Path("hf-whisper-onnx"),
+        }
+    prefix = info["prefix"]
     return {
         "dir": d,
         "encoder": d / f"{prefix}-encoder.int8.onnx",
@@ -249,16 +257,27 @@ def ensure_whisper_model(model_id: str = DEFAULT_WHISPER_MODEL) -> Dict[str, Pat
 
     info = WHISPER_MAP[model_id]
     repo_id = info["hf_repo"]
-    prefix = info["prefix"]
     target_dir = paths["dir"]
     target_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"[ModelManager] Downloading Whisper ONNX '{model_id}' from {repo_id} to {target_dir} ...")
-    files_to_fetch = [
-        f"{prefix}-encoder.int8.onnx",
-        f"{prefix}-decoder.int8.onnx",
-        f"{prefix}-tokens.txt",
-    ]
+    if info.get("engine") == "hf-whisper-onnx":
+        files_to_fetch = [
+            "config.json",
+            "generation_config.json",
+            "preprocessor_config.json",
+            "tokenizer.json",
+            "tokenizer_config.json",
+            "onnx/encoder_model_q4.onnx",
+            "onnx/decoder_model_merged_q4.onnx",
+        ]
+    else:
+        prefix = info["prefix"]
+        files_to_fetch = [
+            f"{prefix}-encoder.int8.onnx",
+            f"{prefix}-decoder.int8.onnx",
+            f"{prefix}-tokens.txt",
+        ]
     for fname in files_to_fetch:
         hf_hub_download(
             repo_id=repo_id,

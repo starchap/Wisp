@@ -122,6 +122,14 @@ const FALLBACK_MODELS_STATUS: ModelsStatus = {
       size_mb: '1600',
       downloaded: false,
     },
+    {
+      id: 'hviske-v2',
+      name: 'Hviske v2 — Danish Specialist (CoRal Whisper Large-v3, ~1.06 GB)',
+      description:
+        'Specialized Danish Speech-to-Text model (Syv.ai / CoRal) fine-tuned specifically on Danish dialects, compound words, and landmarks.',
+      size_mb: '1065',
+      downloaded: false,
+    },
   ],
   clarification_models: [
     {

@@ -959,13 +959,16 @@ def _whisper_log_mel_spectrogram(audio_16k: np.ndarray, n_mels: int = 80) -> np.
 
 class WhisperONNXRunner:
     """
-    Runs Whisper INT8 ONNX encoder + decoder directly via Microsoft's signed `onnxruntime.InferenceSession`.
-    Supports multilingual transcription, spoken language auto-detection, and direct English translation.
+    Runs Whisper ONNX encoder + decoder directly via Microsoft's signed `onnxruntime.InferenceSession`.
+    Supports both:
+    - Standard `sherpa-onnx` Whisper INT8 models (`tiny`, `base`, `small`, `medium`, `turbo`)
+    - Specialized Danish HuggingFace/Optimum Whisper ONNX models (`hviske-v2` — Syv.ai / CoRal Whisper Large-v3)
     """
 
     def __init__(self, model_id: str):
         self.model_id = model_id
         paths = resolve_local_whisper_model(model_id)
+        self.is_hf_onnx = "engine" in paths and str(paths["engine"]) == "hf-whisper-onnx"
         sess_opts = ort.SessionOptions()
         sess_opts.intra_op_num_threads = 4
         self.encoder = ort.InferenceSession(
@@ -978,6 +981,35 @@ class WhisperONNXRunner:
             sess_options=sess_opts,
             providers=["CPUExecutionProvider"],
         )
+
+        if self.is_hf_onnx:
+            self.hf_tokenizer = Tokenizer.from_file(str(paths["tokens"]))
+            cfg_path = paths["dir"] / "config.json"
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8")) if cfg_path.exists() else {}
+            self.n_mels = int(cfg.get("num_mel_bins", 128))
+            self.n_text_layer = int(cfg.get("decoder_layers", 32))
+            self.n_heads = int(cfg.get("decoder_attention_heads", 20))
+            self.d_model = int(cfg.get("d_model", 1280))
+            self.head_dim = self.d_model // max(1, self.n_heads)
+            self.sot = self.hf_tokenizer.token_to_id("<|startoftranscript|>") or 50258
+            self.eot = self.hf_tokenizer.token_to_id("<|endoftext|>") or 50257
+            self.sot_prev = self.hf_tokenizer.token_to_id("<|startofprev|>") or 50362
+            self.transcribe_id = self.hf_tokenizer.token_to_id("<|transcribe|>") or 50360
+            self.translate_id = self.hf_tokenizer.token_to_id("<|translate|>") or 50359
+            self.no_timestamps = self.hf_tokenizer.token_to_id("<|notimestamps|>") or 50364
+            self.is_multilingual = True
+            self.lang_to_id = {}
+            self.id_to_lang = {}
+            for code in ("da", "en", "de", "es", "fr", "sv", "no", "nl", "it", "pt"):
+                tid = self.hf_tokenizer.token_to_id(f"<|{code}|>")
+                if tid is not None:
+                    self.lang_to_id[code] = int(tid)
+                    self.id_to_lang[int(tid)] = code
+            self.lang_tokens_arr = np.array(list(self.lang_to_id.values()), dtype=np.int64)
+            self.tokens_map = {}
+            self._by_first_byte = {}
+            return
+
         meta = self.encoder.get_modelmeta().custom_metadata_map
         self.n_mels = int(meta.get("n_mels", 80))
         self.n_text_layer = int(meta.get("n_text_layer", 6))
@@ -1025,6 +1057,8 @@ class WhisperONNXRunner:
         """Encode preceding conversation context string into Whisper token IDs for `<|startofprev|>`."""
         if not text_str or not text_str.strip():
             return []
+        if self.is_hf_onnx:
+            return self.hf_tokenizer.encode(" " + text_str.strip(), add_special_tokens=False).ids[-max_tokens:]
         raw = (" " + text_str.strip()).encode("utf-8")
         out: List[int] = []
         i = 0
@@ -1042,6 +1076,13 @@ class WhisperONNXRunner:
         return out[-max_tokens:]
 
     def encode_audio(self, audio_16k: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        if self.is_hf_onnx:
+            padded = np.zeros(480000, dtype=np.float32)
+            n_copy = min(480000, len(audio_16k))
+            padded[:n_copy] = audio_16k[:n_copy]
+            mel = _whisper_log_mel_spectrogram(padded, self.n_mels)
+            hidden = self.encoder.run(None, {"input_features": mel})[0]
+            return hidden, hidden
         mel = _whisper_log_mel_spectrogram(audio_16k, self.n_mels)
         cross_k, cross_v = self.encoder.run(None, {"mel": mel})
         return cross_k, cross_v
@@ -1052,6 +1093,11 @@ class WhisperONNXRunner:
         cross_v: np.ndarray,
         allowed_languages: Optional[List[str]] = None,
     ) -> str:
+        if self.is_hf_onnx:
+            # Hviske v2 is a specialized Danish ASR model
+            if allowed_languages and len(allowed_languages) == 1:
+                return allowed_languages[0]
+            return "da"
         if not self.is_multilingual or len(self.lang_tokens_arr) == 0:
             return "en"
         valid_allowed = [
@@ -1092,6 +1138,77 @@ class WhisperONNXRunner:
         duration_sec: float = 10.0,
         context_prompt: Optional[str] = None,
     ) -> str:
+        if self.is_hf_onnx:
+            hidden = cross_k
+            lang_id = self.lang_to_id.get(language, self.lang_to_id.get("da", 50285))
+            task_id = self.translate_id if task == "translate" else self.transcribe_id
+            init_ids = np.array([[self.sot, lang_id, task_id, self.no_timestamps]], dtype=np.int64)
+            feed = {
+                "input_ids": init_ids,
+                "encoder_hidden_states": hidden,
+                "use_cache_branch": np.array([False], dtype=bool),
+            }
+            for l in range(self.n_text_layer):
+                feed[f"past_key_values.{l}.decoder.key"] = np.zeros(
+                    (1, self.n_heads, 0, self.head_dim), dtype=np.float32
+                )
+                feed[f"past_key_values.{l}.decoder.value"] = np.zeros(
+                    (1, self.n_heads, 0, self.head_dim), dtype=np.float32
+                )
+                feed[f"past_key_values.{l}.encoder.key"] = np.zeros(
+                    (1, self.n_heads, 1500, self.head_dim), dtype=np.float32
+                )
+                feed[f"past_key_values.{l}.encoder.value"] = np.zeros(
+                    (1, self.n_heads, 1500, self.head_dim), dtype=np.float32
+                )
+            outs = self.decoder.run(None, feed)
+            logits = outs[0]
+            presents = outs[1:]
+            enc_kv = {}
+            dec_kv = {}
+            for l in range(self.n_text_layer):
+                dec_kv[l] = (presents[l * 4], presents[l * 4 + 1])
+                enc_kv[l] = (presents[l * 4 + 2], presents[l * 4 + 3])
+
+            max_tokens = min(200, max(24, int(duration_sec * 14)))
+            out_ids: List[int] = []
+            next_tok = int(np.argmax(logits[0, -1]))
+            dummy_hidden = np.zeros((1, 1, self.d_model), dtype=np.float32)
+
+            for _ in range(max_tokens):
+                if next_tok == self.eot:
+                    break
+                if next_tok < self.eot:
+                    out_ids.append(next_tok)
+                if len(out_ids) >= 6 and len(set(out_ids[-6:])) == 1:
+                    out_ids = out_ids[:-5]
+                    break
+                if len(out_ids) >= 8 and out_ids[-4:] == out_ids[-8:-4]:
+                    out_ids = out_ids[:-4]
+                    break
+                step_feed = {
+                    "input_ids": np.array([[next_tok]], dtype=np.int64),
+                    "encoder_hidden_states": dummy_hidden,
+                    "use_cache_branch": np.array([True], dtype=bool),
+                }
+                for l in range(self.n_text_layer):
+                    step_feed[f"past_key_values.{l}.decoder.key"] = dec_kv[l][0]
+                    step_feed[f"past_key_values.{l}.decoder.value"] = dec_kv[l][1]
+                    step_feed[f"past_key_values.{l}.encoder.key"] = enc_kv[l][0]
+                    step_feed[f"past_key_values.{l}.encoder.value"] = enc_kv[l][1]
+                outs = self.decoder.run(None, step_feed)
+                logits = outs[0]
+                presents = outs[1:]
+                for l in range(self.n_text_layer):
+                    dec_kv[l] = (presents[l * 4], presents[l * 4 + 1])
+                next_tok = int(np.argmax(logits[0, -1]))
+
+            text_out = self.hf_tokenizer.decode(out_ids, skip_special_tokens=True).strip()
+            if text_out and text_out[0].islower():
+                text_out = text_out[0].upper() + text_out[1:]
+            if text_out and text_out[-1] not in ".?!…":
+                text_out += "."
+            return text_out
         self_k = np.zeros((self.n_text_layer, 1, self.n_text_ctx, self.n_text_state), dtype=np.float32)
         self_v = np.zeros((self.n_text_layer, 1, self.n_text_ctx, self.n_text_state), dtype=np.float32)
 
