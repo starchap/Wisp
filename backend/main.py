@@ -46,6 +46,7 @@ from models_manager import (
     ensure_speaker_model,
     ensure_whisper_model,
     get_models_status,
+    set_download_progress_hook,
 )
 from session_store import (
     SAMPLE_RATE,
@@ -177,13 +178,16 @@ class DownloadModelRequest(BaseModel):
 def api_download_model(req: DownloadModelRequest):
     """Download and cache requested local AI models for 100% offline operation."""
     def _worker():
+        set_download_progress_hook(
+            lambda msg: broadcast_event("model_progress", {"status": msg, "busy": True})
+        )
         try:
             if req.model_type in ("speaker", "all_recommended", "onboarding"):
                 broadcast_event("model_progress", {"status": "Downloading Step 1/4: 3D-Speaker Diarization ONNX Model (~26 MB)...", "busy": True})
                 ensure_speaker_model()
             if req.model_type in ("whisper", "all_recommended", "onboarding"):
                 w_id = req.whisper_id or DEFAULT_WHISPER_MODEL
-                broadcast_event("model_progress", {"status": f"Downloading Step 2/4: Whisper '{w_id}' Speech-to-Text Model...", "busy": True})
+                broadcast_event("model_progress", {"status": f"Downloading Step 2/4: Speech-to-Text Model '{w_id}'...", "busy": True})
                 ensure_whisper_model(w_id)
             if req.model_type == "clarification" or (
                 req.model_type == "onboarding"
@@ -206,7 +210,9 @@ def api_download_model(req: DownloadModelRequest):
                 ensure_nllb_model()
             broadcast_event("model_progress", {"status": "All requested models are ready offline!", "busy": False, "models_status": get_models_status()})
         except Exception as exc:
-            broadcast_event("model_progress", {"status": f"Download error: {exc}", "busy": False, "error": str(exc)})
+            broadcast_event("model_progress", {"status": f"Download error: {exc}", "busy": False, "error": str(exc), "models_status": get_models_status()})
+        finally:
+            set_download_progress_hook(None)
 
     threading.Thread(target=_worker, daemon=True).start()
     return {"status": "started"}

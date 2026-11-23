@@ -16,6 +16,7 @@ import {
   createSession,
   deleteSession,
   fetchConfig,
+  fetchModelsStatus,
   fetchSession,
   fetchSessions,
   getSessionAudioUrl,
@@ -232,6 +233,13 @@ export function App() {
     };
   }, []);
 
+  // Refresh models status whenever Settings, Onboarding, or Session dialog is opened
+  useEffect(() => {
+    if (isSettingsOpen || isOnboardingOpen || sessionDialog.isOpen) {
+      fetchModelsStatus().then(setModelsStatus).catch(() => {});
+    }
+  }, [isSettingsOpen, isOnboardingOpen, sessionDialog.isOpen]);
+
   // Real-time WebSocket subscription
   useEffect(() => {
     let ws: WebSocket | null = null;
@@ -241,6 +249,7 @@ export function App() {
       ws = new WebSocket(WS_URL);
       ws.onopen = () => {
         setErrorBanner(null);
+        fetchModelsStatus().then(setModelsStatus).catch(() => {});
       };
       ws.onmessage = (event) => {
         try {

@@ -8,10 +8,18 @@ Handles downloading, caching, and verifying local AI models:
 """
 import shutil
 import ssl
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Dict, List
+from typing import Callable, Dict, List, Optional
+
+_PROGRESS_HOOK: Optional[Callable[[str], None]] = None
+
+
+def set_download_progress_hook(hook: Optional[Callable[[str], None]]) -> None:
+    global _PROGRESS_HOOK
+    _PROGRESS_HOOK = hook
 
 try:
     import certifi
@@ -61,20 +69,41 @@ def _get_ssl_contexts() -> List[ssl.SSLContext]:
     return contexts
 
 
-def _download_url_to_path(url: str, dest: Path) -> Path:
+def _download_url_to_path(url: str, dest: Path, label: str = "") -> Path:
     if dest.exists() and dest.stat().st_size > 0:
         return dest
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = dest.with_suffix(dest.suffix + ".tmp")
     last_err = None
+    short_name = label or dest.name
 
     for ctx in _get_ssl_contexts():
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "WispAI/1.0"})
-            with urllib.request.urlopen(req, timeout=180, context=ctx) as resp, open(
+            with urllib.request.urlopen(req, timeout=300, context=ctx) as resp, open(
                 tmp_path, "wb"
             ) as out_f:
-                shutil.copyfileobj(resp, out_f, length=1024 * 1024)
+                total = int(resp.headers.get("Content-Length", "0") or "0")
+                downloaded = 0
+                last_emit = 0.0
+                while True:
+                    chunk = resp.read(1024 * 512)
+                    if not chunk:
+                        break
+                    out_f.write(chunk)
+                    downloaded += len(chunk)
+                    now = time.time()
+                    if _PROGRESS_HOOK and (now - last_emit >= 0.35 or (total and downloaded >= total)):
+                        last_emit = now
+                        dl_mb = downloaded / (1024 * 1024)
+                        if total > 0:
+                            tot_mb = total / (1024 * 1024)
+                            pct = min(100, int(round((downloaded / total) * 100)))
+                            _PROGRESS_HOOK(
+                                f"Downloading {short_name}: {dl_mb:.1f} / {tot_mb:.1f} MB ({pct}%)"
+                            )
+                        else:
+                            _PROGRESS_HOOK(f"Downloading {short_name}: {dl_mb:.1f} MB...")
             tmp_path.replace(dest)
             return dest
         except (urllib.error.URLError, ssl.SSLError) as err:
@@ -92,7 +121,7 @@ def hf_hub_download(repo_id: str, filename: str, local_dir: str) -> str:
     """Download a public model file directly from Hugging Face via standard-library urllib (zero native DLL dependencies)."""
     dest = Path(local_dir) / filename
     url = f"https://huggingface.co/{repo_id}/resolve/main/{filename}"
-    return str(_download_url_to_path(url, dest))
+    return str(_download_url_to_path(url, dest, label=f"{repo_id.split('/')[-1]}/{Path(filename).name}"))
 
 
 def get_whisper_model_dir(model_id: str) -> Path:

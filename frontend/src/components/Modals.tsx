@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
+  AlertCircle,
   ArrowRight,
   Check,
   CheckCircle2,
@@ -33,6 +34,7 @@ import {
 import {
   deleteLocalModel,
   fetchExportText,
+  fetchModelsStatus,
   triggerModelDownload,
   updateStoragePath,
 } from '../api';
@@ -289,13 +291,88 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 }) => {
   const { t, uiLanguage, setUiLanguage, theme, setTheme } = useI18n();
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
+  const [downloadingKey, setDownloadingKey] = useState<string | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
   const modelsStatus = rawModelsStatus || FALLBACK_MODELS_STATUS;
 
   useEffect(() => {
     if (isOpen && initialTab) {
       setActiveTab(initialTab);
     }
+    if (isOpen) {
+      fetchModelsStatus()
+        .then((st) => onModelsStatusUpdated?.(st))
+        .catch(() => {});
+    }
   }, [isOpen, initialTab]);
+
+  useEffect(() => {
+    if (!isBusy && downloadingKey) {
+      fetchModelsStatus()
+        .then((st) => onModelsStatusUpdated?.(st))
+        .catch(() => {});
+    }
+  }, [isBusy]);
+
+  const startDownloadWithPolling = async (
+    key: string,
+    modelType:
+      | 'whisper'
+      | 'speaker'
+      | 'clarification'
+      | 'opus'
+      | 'nllb'
+      | 'all_recommended'
+      | 'onboarding',
+    whisperId?: string,
+    translationId?: string,
+    clarificationId?: string
+  ) => {
+    setDownloadError(null);
+    setDownloadingKey(key);
+    try {
+      await triggerModelDownload(
+        modelType,
+        whisperId,
+        translationId,
+        clarificationId
+      );
+      const startedAt = Date.now();
+      const timer = setInterval(async () => {
+        try {
+          const st = await fetchModelsStatus();
+          onModelsStatusUpdated?.(st);
+          const done =
+            (modelType === 'whisper' &&
+              st.whisper_models.some(
+                (w) => w.id === whisperId && w.downloaded
+              )) ||
+            (modelType === 'speaker' && st.speaker_diarization.downloaded) ||
+            (modelType === 'clarification' &&
+              (st.clarification_models || []).some(
+                (c) => c.id === clarificationId && c.downloaded
+              )) ||
+            (modelType === 'opus' &&
+              (st.translation_models || []).some(
+                (m) => m.id === 'opus-mt-da-en' && m.downloaded
+              )) ||
+            (modelType === 'nllb' &&
+              (st.translation_models || []).some(
+                (m) => m.id === 'nllb-200-600M' && m.downloaded
+              ));
+          if (done || Date.now() - startedAt > 600000) {
+            clearInterval(timer);
+            setDownloadingKey(null);
+          }
+        } catch (_) {}
+      }, 1500);
+    } catch (err: any) {
+      setDownloadingKey(null);
+      setDownloadError(
+        err?.message || 'Could not reach local AI backend on port 8765.'
+      );
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -548,9 +625,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       </button>
                     )}
                     <button
-                      disabled={isBusy}
+                      disabled={isBusy || !!downloadingKey}
                       onClick={() =>
-                        triggerModelDownload('all_recommended', 'small')
+                        startDownloadWithPolling(
+                          'all_recommended',
+                          'all_recommended',
+                          'small'
+                        )
                       }
                       className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-semibold shrink-0 transition shadow-md shadow-emerald-600/20"
                     >
@@ -559,14 +640,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                 </div>
 
-                {progressText && (
+                {downloadError && (
+                  <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 flex items-center gap-2.5 text-xs text-rose-200">
+                    <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                    <span>{downloadError}</span>
+                  </div>
+                )}
+
+                {(progressText || downloadingKey) && (
                   <div className="p-3 rounded-xl bg-blue-500/15 border border-blue-500/30 flex items-center gap-2.5 text-xs text-blue-200">
-                    {isBusy ? (
+                    {isBusy || downloadingKey ? (
                       <Loader2 className="w-4 h-4 animate-spin text-blue-400 shrink-0" />
                     ) : (
                       <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
                     )}
-                    <span>{progressText}</span>
+                    <span>
+                      {progressText ||
+                        `Downloading model '${downloadingKey}' from Hugging Face...`}
+                    </span>
                   </div>
                 )}
 
@@ -639,14 +730,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             </>
                           ) : (
                             <button
-                              disabled={isBusy}
-                              onClick={() => triggerModelDownload('speaker')}
+                              disabled={isBusy || downloadingKey === 'speaker'}
+                              onClick={() =>
+                                startDownloadWithPolling('speaker', 'speaker')
+                              }
                               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-semibold transition"
                             >
-                              <Download className="w-3.5 h-3.5" />
+                              {downloadingKey === 'speaker' ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <Download className="w-3.5 h-3.5" />
+                              )}
                               <span>
-                                {t('download')} (~
-                                {modelsStatus.speaker_diarization.size_mb} MB)
+                                {downloadingKey === 'speaker'
+                                  ? 'Downloading...'
+                                  : `${t('download')} (~${modelsStatus.speaker_diarization.size_mb} MB)`}
                               </span>
                             </button>
                           )}
@@ -759,16 +857,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                   </div>
                                 ) : (
                                   <button
-                                    disabled={isBusy}
+                                    disabled={
+                                      isBusy || downloadingKey === wm.id
+                                    }
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      triggerModelDownload('whisper', wm.id);
+                                      startDownloadWithPolling(
+                                        wm.id,
+                                        'whisper',
+                                        wm.id
+                                      );
                                     }}
                                     className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-[11px] font-semibold shrink-0 transition"
                                   >
-                                    <Download className="w-3 h-3" />
+                                    {downloadingKey === wm.id ? (
+                                      <Loader2 className="w-3 h-3 animate-spin" />
+                                    ) : (
+                                      <Download className="w-3 h-3" />
+                                    )}
                                     <span>
-                                      {t('download')} (~{wm.size_mb} MB)
+                                      {downloadingKey === wm.id
+                                        ? 'Downloading...'
+                                        : `${t('download')} (~${wm.size_mb} MB)`}
                                     </span>
                                   </button>
                                 )}
@@ -893,10 +1003,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                   </div>
                                 ) : (
                                   <button
-                                    disabled={isBusy}
+                                    disabled={
+                                      isBusy || downloadingKey === cm.id
+                                    }
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      triggerModelDownload(
+                                      startDownloadWithPolling(
+                                        cm.id,
                                         'clarification',
                                         undefined,
                                         undefined,
@@ -905,9 +1018,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                     }}
                                     className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-[11px] font-semibold shrink-0 transition"
                                   >
-                                    <Download className="w-3 h-3" />
+                                    {downloadingKey === cm.id ? (
+                                      <Loader2 className="w-3 h-3 animate-spin" />
+                                    ) : (
+                                      <Download className="w-3 h-3" />
+                                    )}
                                     <span>
-                                      {t('download')} (~{cm.size_mb} MB)
+                                      {downloadingKey === cm.id
+                                        ? 'Downloading...'
+                                        : `${t('download')} (~${cm.size_mb} MB)`}
                                     </span>
                                   </button>
                                 )}
@@ -1036,10 +1155,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                   </div>
                                 ) : (
                                   <button
-                                    disabled={isBusy}
+                                    disabled={
+                                      isBusy || downloadingKey === tm.id
+                                    }
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      triggerModelDownload(
+                                      startDownloadWithPolling(
+                                        tm.id,
                                         tm.id === 'opus-mt-da-en'
                                           ? 'opus'
                                           : 'nllb'
@@ -1047,9 +1169,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                     }}
                                     className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-[11px] font-semibold shrink-0 transition"
                                   >
-                                    <Download className="w-3 h-3" />
+                                    {downloadingKey === tm.id ? (
+                                      <Loader2 className="w-3 h-3 animate-spin" />
+                                    ) : (
+                                      <Download className="w-3 h-3" />
+                                    )}
                                     <span>
-                                      {t('download')} (~{tm.size_mb} MB)
+                                      {downloadingKey === tm.id
+                                        ? 'Downloading...'
+                                        : `${t('download')} (~${tm.size_mb} MB)`}
                                     </span>
                                   </button>
                                 )}
