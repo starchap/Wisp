@@ -459,7 +459,49 @@ def get_system_hardware_recommendations() -> Dict:
                 avail_ram_gb = round(stat.ullAvailPhys / (1024**3), 1)
         except Exception:
             pass
+    elif sys.platform == "darwin":
+        try:
+            import subprocess
+
+            brand = (
+                subprocess.check_output(
+                    ["sysctl", "-n", "machdep.cpu.brand_string"],
+                    stderr=subprocess.DEVNULL,
+                )
+                .decode("utf-8", errors="ignore")
+                .strip()
+            )
+            if brand:
+                cpu_name = brand
+        except Exception:
+            pass
+        try:
+            import subprocess
+
+            mem_bytes = int(
+                subprocess.check_output(
+                    ["sysctl", "-n", "hw.memsize"],
+                    stderr=subprocess.DEVNULL,
+                )
+                .decode("utf-8", errors="ignore")
+                .strip()
+            )
+            if mem_bytes > 0:
+                total_ram_gb = round(mem_bytes / (1024**3), 1)
+                avail_ram_gb = round(total_ram_gb * 0.65, 1)
+        except Exception:
+            pass
     else:
+        try:
+            if Path("/proc/cpuinfo").exists():
+                for line in Path("/proc/cpuinfo").read_text(errors="ignore").splitlines():
+                    if "model name" in line and ":" in line:
+                        cname = line.split(":", 1)[1].strip()
+                        if cname:
+                            cpu_name = cname
+                            break
+        except Exception:
+            pass
         try:
             if Path("/proc/meminfo").exists():
                 for line in Path("/proc/meminfo").read_text().splitlines():

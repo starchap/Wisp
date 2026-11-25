@@ -329,25 +329,87 @@ def decode_audio_file_to_16k_mono(file_path: str) -> np.ndarray:
                     return mono
             except Exception:
                 pass
-        out_path = str(file_path) + ".conv16k.wav"
+        with tempfile.NamedTemporaryFile(suffix=".conv16k.wav", delete=False) as tmp_out:
+            out_path = tmp_out.name
+        tmp_m4a = out_path + ".m4a"
         try:
             if sys.platform == "darwin":
-                subprocess.run(
-                    [
-                        "afconvert",
-                        "-f",
-                        "WAVE",
-                        "-d",
-                        f"LEI16@{SAMPLE_RATE}",
-                        "-c",
-                        "1",
-                        str(file_path),
-                        out_path,
-                    ],
-                    check=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
+                # 1. Try macOS built-in CoreAudio `afconvert`
+                af_ok = False
+                try:
+                    subprocess.run(
+                        [
+                            "afconvert",
+                            "-f",
+                            "WAVE",
+                            "-d",
+                            f"LEI16@{SAMPLE_RATE}",
+                            "-c",
+                            "1",
+                            str(file_path),
+                            out_path,
+                        ],
+                        check=True,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    af_ok = Path(out_path).exists() and Path(out_path).stat().st_size > 44
+                except Exception:
+                    af_ok = False
+
+                # 2. If input is a video .mp4/.mov container where afconvert needs audio track extraction first,
+                # use macOS built-in AVFoundation `avconvert` (or ffmpeg if installed)
+                if not af_ok:
+                    try:
+                        subprocess.run(
+                            [
+                                "avconvert",
+                                "--source",
+                                str(file_path),
+                                "--output",
+                                tmp_m4a,
+                                "--preset",
+                                "PresetAppleM4A",
+                                "--replace",
+                            ],
+                            check=True,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
+                        subprocess.run(
+                            [
+                                "afconvert",
+                                "-f",
+                                "WAVE",
+                                "-d",
+                                f"LEI16@{SAMPLE_RATE}",
+                                "-c",
+                                "1",
+                                tmp_m4a,
+                                out_path,
+                            ],
+                            check=True,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
+                    except Exception:
+                        subprocess.run(
+                            [
+                                "ffmpeg",
+                                "-y",
+                                "-i",
+                                str(file_path),
+                                "-vn",
+                                "-ar",
+                                str(SAMPLE_RATE),
+                                "-ac",
+                                "1",
+                                out_path,
+                            ],
+                            check=True,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
             else:
                 subprocess.run(
                     [
@@ -375,6 +437,7 @@ def decode_audio_file_to_16k_mono(file_path: str) -> np.ndarray:
             )
         finally:
             Path(out_path).unlink(missing_ok=True)
+            Path(tmp_m4a).unlink(missing_ok=True)
 
 
 def decode_audio_to_16k_mono(raw_bytes: bytes, filename: str = "audio.wav") -> np.ndarray:
