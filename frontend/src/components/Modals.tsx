@@ -673,16 +673,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                 {/* System Specs & Hardware-Based AI Model Recommendations Banner */}
                 {modelsStatus.system_specs && (
-                  <div className="p-4 rounded-2xl bg-indigo-950/30 border border-indigo-500/35 space-y-3">
+                  <div className="p-4 rounded-2xl bg-indigo-950/25 border border-indigo-500/35 space-y-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-600 text-white">
-                          <Cpu className="w-3 h-3" />
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-indigo-600 text-white shadow-sm">
+                          <Cpu className="w-3.5 h-3.5" />
                           <span>
                             Hardware Recommendation: {modelsStatus.system_specs.tier_label}
                           </span>
                         </span>
-                        <span className="text-xs font-mono text-indigo-200/90">
+                        <span className="inline-flex items-center px-2.5 py-1 rounded-lg bg-slate-900/90 border border-indigo-500/30 text-[11px] font-mono font-semibold text-slate-200">
                           {modelsStatus.system_specs.cpu_name} &bull;{' '}
                           {modelsStatus.system_specs.cpu_threads} Threads &bull;{' '}
                           {modelsStatus.system_specs.total_ram_gb} GB RAM
@@ -690,7 +690,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       </div>
                     </div>
 
-                    <p className="text-xs text-slate-300 leading-relaxed">
+                    <p className="text-xs text-slate-200 leading-relaxed font-medium">
                       {modelsStatus.system_specs.summary}
                     </p>
 

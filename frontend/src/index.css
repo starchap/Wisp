@@ -76,6 +76,7 @@ html.theme-light .bg-slate-900\/70 {
 /* 3. Interactive Controls, Cards, Dropdown Pills (Slate 800 & 700 variants) */
 html.theme-light .bg-slate-800,
 html.theme-light .bg-slate-800\/40,
+html.theme-light .bg-slate-800\/50,
 html.theme-light .bg-slate-800\/60,
 html.theme-light .bg-slate-800\/70,
 html.theme-light .bg-slate-800\/75,
@@ -85,8 +86,9 @@ html.theme-light .bg-slate-800\/95 {
   background-color: #f1f5f9 !important;
 }
 
-html.theme-light .bg-slate-700\/60 {
-  background-color: #e2e8f0 !important;
+html.theme-light .bg-slate-700\/60,
+html.theme-light .bg-slate-600 {
+  background-color: #cbd5e1 !important;
 }
 
 /* Hover states in Light Mode (prevent dark-mode slate-800/700 hover flash) */
@@ -94,44 +96,61 @@ html.theme-light .hover\:bg-slate-800:hover,
 html.theme-light .hover\:bg-slate-800\/70:hover,
 html.theme-light .hover\:bg-slate-700:hover,
 html.theme-light .hover\:bg-slate-700\/60:hover,
+html.theme-light .hover\:bg-slate-700\/80:hover,
 html.theme-light .hover\:bg-slate-900\/70:hover {
   background-color: #e2e8f0 !important;
 }
 
+html.theme-light .hover\:bg-blue-600\/25:hover {
+  background-color: #dbeafe !important;
+}
+
+html.theme-light .hover\:bg-emerald-600\/30:hover,
+html.theme-light .hover\:bg-emerald-500\/20:hover {
+  background-color: #d1fae5 !important;
+}
+
+html.theme-light .hover\:bg-indigo-600\/30:hover {
+  background-color: #e0e7ff !important;
+}
+
+html.theme-light .hover\:bg-rose-600\/20:hover,
+html.theme-light .hover\:bg-rose-500\/15:hover,
+html.theme-light .hover\:bg-rose-500\/20:hover {
+  background-color: #ffe4e6 !important;
+}
+
 /* 4. Active / Tinted Accent Cards in Light Mode (fix muddy -950 tints!) */
-html.theme-light .bg-blue-950\/30 {
+html.theme-light .bg-blue-950\/30,
+html.theme-light .bg-blue-500\/10,
+html.theme-light .bg-blue-500\/15 {
   background-color: #eff6ff !important; /* Crisp light blue-50 */
-  border-color: #3b82f6 !important;
+  border-color: #60a5fa !important;
+}
+
+html.theme-light .bg-blue-600\/15,
+html.theme-light .bg-blue-600\/20 {
+  background-color: #dbeafe !important; /* Active session card / light blue-100 */
+  border-color: #60a5fa !important;
 }
 
 html.theme-light .bg-emerald-950\/20,
-html.theme-light .bg-emerald-950\/25 {
+html.theme-light .bg-emerald-950\/25,
+html.theme-light .bg-emerald-500\/10,
+html.theme-light .bg-emerald-500\/15 {
   background-color: #ecfdf5 !important; /* Crisp light emerald-50 */
-  border-color: #10b981 !important;
+  border-color: #34d399 !important;
+}
+
+html.theme-light .bg-emerald-600\/20,
+html.theme-light .bg-emerald-500\/20 {
+  background-color: #d1fae5 !important; /* Crisp light emerald-100 */
+  border-color: #34d399 !important;
 }
 
 html.theme-light .bg-amber-950\/25 {
   background-color: #fffbeb !important; /* Crisp light amber-50 */
-  border-color: #d97706 !important;
-}
-
-html.theme-light .bg-indigo-950\/25,
-html.theme-light .bg-indigo-600\/20 {
-  background-color: #eef2ff !important; /* Crisp light indigo-50 */
-}
-
-html.theme-light .bg-blue-600\/15 {
-  background-color: #dbeafe !important; /* Active session card in sidebar */
-  border-color: #60a5fa !important;
-}
-
-html.theme-light .bg-emerald-600\/20 {
-  background-color: #d1fae5 !important;
-}
-
-html.theme-light .bg-emerald-500\/10,
-html.theme-light .bg-emerald-500\/15 {
-  background-color: #ecfdf5 !important;
+  border-color: #f59e0b !important;
 }
 
 html.theme-light .bg-amber-500\/15,
@@ -140,13 +159,23 @@ html.theme-light .bg-amber-500\/20 {
   border-color: #d97706 !important;
 }
 
-html.theme-light .bg-blue-500\/10,
-html.theme-light .bg-blue-500\/15 {
-  background-color: #eff6ff !important;
+html.theme-light .bg-indigo-950\/25,
+html.theme-light .bg-indigo-950\/30,
+html.theme-light .bg-indigo-600\/20,
+html.theme-light .bg-indigo-500\/15 {
+  background-color: #eef2ff !important; /* Crisp light indigo-50 */
+  border-color: #818cf8 !important;
 }
 
-html.theme-light .bg-indigo-500\/15 {
-  background-color: #eef2ff !important;
+html.theme-light .bg-rose-500\/15,
+html.theme-light .bg-rose-500\/20 {
+  background-color: #fff1f2 !important; /* Crisp light rose-50 */
+  border-color: #fb7185 !important;
+}
+
+html.theme-light .bg-pink-500\/15 {
+  background-color: #fdf2f8 !important; /* Crisp light pink-50 */
+  border-color: #f472b6 !important;
 }
 
 /* Soften modal backdrop in Light Mode */
@@ -158,12 +187,49 @@ html.theme-light .bg-black\/75 {
 /* 5. Borders & Dividers in Light Mode */
 html.theme-light .border-slate-800,
 html.theme-light .border-slate-800\/60,
+html.theme-light .border-slate-800\/70,
 html.theme-light .border-slate-800\/80,
 html.theme-light .border-slate-800\/90,
 html.theme-light .border-slate-700,
+html.theme-light .border-slate-700\/60,
 html.theme-light .border-slate-700\/70,
-html.theme-light .border-slate-700\/80 {
+html.theme-light .border-slate-700\/80,
+html.theme-light .border-slate-600 {
   border-color: #cbd5e1 !important;
+}
+
+html.theme-light .border-indigo-500\/30,
+html.theme-light .border-indigo-500\/35,
+html.theme-light .border-indigo-500\/45,
+html.theme-light .border-indigo-500\/50 {
+  border-color: #a5b4fc !important;
+}
+
+html.theme-light .border-blue-500\/20,
+html.theme-light .border-blue-500\/30,
+html.theme-light .border-blue-500\/40,
+html.theme-light .border-blue-500\/60 {
+  border-color: #93c5fd !important;
+}
+
+html.theme-light .border-emerald-500\/20,
+html.theme-light .border-emerald-500\/25,
+html.theme-light .border-emerald-500\/30,
+html.theme-light .border-emerald-500\/35,
+html.theme-light .border-emerald-500\/40,
+html.theme-light .border-emerald-500\/60 {
+  border-color: #6ee7b7 !important;
+}
+
+html.theme-light .border-amber-500\/30,
+html.theme-light .border-amber-500\/40,
+html.theme-light .border-amber-500\/60 {
+  border-color: #f59e0b !important;
+}
+
+html.theme-light .border-rose-500\/30,
+html.theme-light .border-rose-500\/40 {
+  border-color: #fda4af !important;
 }
 
 html.theme-light .divide-slate-800\/80 > :not([hidden]) ~ :not([hidden]) {
@@ -184,23 +250,26 @@ html.theme-light .text-slate-400 {
   color: #475569 !important;
 }
 
-html.theme-light .text-slate-500 {
+html.theme-light .text-slate-500,
+html.theme-light .text-slate-600 {
   color: #64748b !important;
 }
 
-/* Keep white text on solid primary buttons, convert other white text to deep slate-900 */
-html.theme-light .text-white:not(.bg-blue-600):not(.bg-blue-600 *):not(.bg-emerald-600):not(.bg-emerald-600 *):not(.bg-indigo-600):not(.bg-indigo-600 *):not(.bg-rose-600):not(.bg-rose-600 *):not(.bg-purple-600):not(.bg-purple-600 *):not(.bg-amber-600):not(.bg-amber-600 *):not(.bg-pink-600):not(.bg-pink-600 *):not(.bg-slate-700):not(.bg-slate-700 *) {
-  color: #0f172a !important;
-}
-
-html.theme-light .hover\:text-white:hover:not(.bg-blue-600):not(.bg-emerald-600):not(.bg-indigo-600):not(.bg-rose-600):not(.bg-amber-600):not(.bg-pink-600) {
+/* Convert default white text to deep slate-900 in Light Mode */
+html.theme-light .text-white,
+html.theme-light .hover\:text-white:hover,
+html.theme-light .hover\:text-slate-200:hover,
+html.theme-light .hover\:text-slate-300:hover {
   color: #0f172a !important;
 }
 
 /* 7. Accent Text Contrast in Light Mode (fix pale -200/-300/-400 text on light backgrounds!) */
 html.theme-light .text-emerald-200,
 html.theme-light .text-emerald-300,
-html.theme-light .text-emerald-400 {
+html.theme-light .text-emerald-300\/90,
+html.theme-light .text-emerald-400,
+html.theme-light .hover\:text-emerald-300:hover,
+html.theme-light .hover\:text-emerald-400:hover {
   color: #047857 !important; /* Deep Emerald 700 for crisp legibility */
 }
 
@@ -218,25 +287,53 @@ html.theme-light .text-blue-400 {
 }
 
 html.theme-light .text-indigo-200,
+html.theme-light .text-indigo-200\/90,
 html.theme-light .text-indigo-300,
-html.theme-light .text-indigo-400 {
-  color: #4338ca !important; /* Deep Indigo 700 */
+html.theme-light .text-indigo-400,
+html.theme-light .hover\:text-indigo-200:hover {
+  color: #3730a3 !important; /* Deep Indigo 800 */
 }
 
 html.theme-light .text-rose-200,
-html.theme-light .text-rose-300 {
+html.theme-light .text-rose-300,
+html.theme-light .text-rose-400,
+html.theme-light .hover\:text-rose-400:hover {
   color: #be123c !important; /* Deep Rose 700 */
 }
 
-/* Keep icons inside solid colored badges white in Light Mode */
-html.theme-light .bg-blue-600 svg,
-html.theme-light .bg-emerald-600 svg,
-html.theme-light .bg-indigo-600 svg,
-html.theme-light .bg-rose-600 svg,
-html.theme-light .bg-purple-600 svg,
-html.theme-light .bg-amber-600 svg,
-html.theme-light .bg-pink-600 svg,
-html.theme-light .bg-white\/20 svg {
+html.theme-light .text-pink-400 {
+  color: #be185d !important; /* Deep Pink 700 */
+}
+
+/* 8. Solid Primary Buttons & Badges MUST ALWAYS keep crisp pure white text & icons in Light Mode */
+html.theme-light .bg-blue-600,
+html.theme-light .bg-blue-600 *,
+html.theme-light .bg-blue-500,
+html.theme-light .bg-blue-500 *,
+html.theme-light .bg-emerald-600,
+html.theme-light .bg-emerald-600 *,
+html.theme-light .bg-emerald-500,
+html.theme-light .bg-emerald-500 *,
+html.theme-light .bg-emerald-500\/80,
+html.theme-light .bg-emerald-500\/80 *,
+html.theme-light .bg-indigo-600,
+html.theme-light .bg-indigo-600 *,
+html.theme-light .bg-indigo-500,
+html.theme-light .bg-indigo-500 *,
+html.theme-light .bg-rose-600,
+html.theme-light .bg-rose-600 *,
+html.theme-light .bg-rose-500,
+html.theme-light .bg-rose-500 *,
+html.theme-light .bg-purple-600,
+html.theme-light .bg-purple-600 *,
+html.theme-light .bg-amber-600,
+html.theme-light .bg-amber-600 *,
+html.theme-light .bg-amber-500\/80,
+html.theme-light .bg-amber-500\/80 *,
+html.theme-light .bg-pink-600,
+html.theme-light .bg-pink-600 *,
+html.theme-light .hover\:bg-blue-600:hover,
+html.theme-light .hover\:bg-blue-600:hover * {
   color: #ffffff !important;
 }
 
