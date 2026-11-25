@@ -11,6 +11,7 @@ export interface WhisperModelInfo {
   size_mb: string;
   downloaded?: boolean;
   local_path?: string;
+  language_group?: 'multilingual' | 'da' | string;
 }
 
 export interface ClarificationModelInfo {

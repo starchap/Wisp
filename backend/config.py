@@ -85,6 +85,7 @@ WHISPER_MODELS: List[Dict[str, str]] = [
         "size_mb": "110",
         "hf_repo": "csukuangfj/sherpa-onnx-whisper-tiny",
         "prefix": "tiny",
+        "language_group": "multilingual",
     },
     {
         "id": "base",
@@ -93,6 +94,7 @@ WHISPER_MODELS: List[Dict[str, str]] = [
         "size_mb": "195",
         "hf_repo": "csukuangfj/sherpa-onnx-whisper-base",
         "prefix": "base",
+        "language_group": "multilingual",
     },
     {
         "id": "small",
@@ -101,6 +103,7 @@ WHISPER_MODELS: List[Dict[str, str]] = [
         "size_mb": "610",
         "hf_repo": "csukuangfj/sherpa-onnx-whisper-small",
         "prefix": "small",
+        "language_group": "multilingual",
     },
     {
         "id": "medium",
@@ -109,6 +112,7 @@ WHISPER_MODELS: List[Dict[str, str]] = [
         "size_mb": "1700",
         "hf_repo": "csukuangfj/sherpa-onnx-whisper-medium",
         "prefix": "medium",
+        "language_group": "multilingual",
     },
     {
         "id": "turbo",
@@ -117,6 +121,7 @@ WHISPER_MODELS: List[Dict[str, str]] = [
         "size_mb": "1600",
         "hf_repo": "csukuangfj/sherpa-onnx-whisper-turbo",
         "prefix": "turbo",
+        "language_group": "multilingual",
     },
     {
         "id": "large-v3",
@@ -125,6 +130,7 @@ WHISPER_MODELS: List[Dict[str, str]] = [
         "size_mb": "1775",
         "hf_repo": "csukuangfj/sherpa-onnx-whisper-large-v3",
         "prefix": "large-v3",
+        "language_group": "multilingual",
     },
     {
         "id": "hviske-v2",
@@ -136,6 +142,7 @@ WHISPER_MODELS: List[Dict[str, str]] = [
         "engine": "hf-whisper-onnx",
         "encoder_file": "onnx/encoder_model_q4.onnx",
         "decoder_file": "onnx/decoder_model_merged_q4.onnx",
+        "language_group": "da",
     },
     {
         "id": "hviske-v2-int8",
@@ -147,6 +154,7 @@ WHISPER_MODELS: List[Dict[str, str]] = [
         "engine": "hf-whisper-onnx",
         "encoder_file": "onnx/encoder_model_q4.onnx",
         "decoder_file": "onnx/decoder_model_merged_int8.onnx",
+        "language_group": "da",
     },
     {
         "id": "roest-315m",
@@ -157,6 +165,7 @@ WHISPER_MODELS: List[Dict[str, str]] = [
         "prefix": "roest-315m",
         "engine": "wav2vec2-onnx",
         "onnx_file": "onnx/model_quantized.onnx",
+        "language_group": "da",
     },
     {
         "id": "roest-v3-315m",
@@ -167,6 +176,7 @@ WHISPER_MODELS: List[Dict[str, str]] = [
         "prefix": "roest-v3-315m",
         "engine": "wav2vec2-onnx",
         "onnx_file": "onnx/model_fp16.onnx",
+        "language_group": "da",
     },
 ]
 

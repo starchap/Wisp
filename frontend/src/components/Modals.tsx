@@ -54,6 +54,22 @@ export type SettingsTab =
   | 'audio'
   | 'about';
 
+export type SttLanguageFilter = 'multilingual' | 'da' | 'all';
+
+function getWhisperLanguageGroup(wm: {
+  id: string;
+  language_group?: string;
+}): 'multilingual' | 'da' {
+  if (
+    wm.language_group === 'da' ||
+    wm.id.startsWith('hviske') ||
+    wm.id.startsWith('roest')
+  ) {
+    return 'da';
+  }
+  return 'multilingual';
+}
+
 interface SettingsModalProps {
   isOpen: boolean;
   initialTab?: SettingsTab;
@@ -285,6 +301,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   const [downloadingKey, setDownloadingKey] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [sttLangFilter, setSttLangFilter] =
+    useState<SttLanguageFilter>('multilingual');
   const modelsStatus = rawModelsStatus || FALLBACK_MODELS_STATUS;
 
   useEffect(() => {
@@ -768,8 +786,41 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         language. Click any downloaded model card to make it active.
                       </p>
 
+                      {/* Language / Category Filter Dropdown for Speech-to-Text Models */}
+                      <div className="p-2.5 rounded-xl bg-slate-900/90 border border-slate-800 flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-[11px] font-semibold text-slate-300 flex items-center gap-1.5">
+                          <Globe className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                          <span>Model Language:</span>
+                        </span>
+                        <select
+                          value={sttLangFilter}
+                          onChange={(e) =>
+                            setSttLangFilter(
+                              e.target.value as SttLanguageFilter
+                            )
+                          }
+                          className="flex-1 min-w-[210px] bg-slate-950 border border-slate-700 hover:border-blue-500/60 focus:border-blue-500 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-white focus:outline-none cursor-pointer"
+                        >
+                          <option value="multilingual">
+                            Multi-Language — Standard Whisper (Default)
+                          </option>
+                          <option value="da">
+                            Dansk (DA) — Danish Specialists (Hviske & Røst)
+                          </option>
+                          <option value="all">
+                            All Speech-to-Text Models ({modelsStatus.whisper_models.length})
+                          </option>
+                        </select>
+                      </div>
+
                       <div className="space-y-2.5">
-                        {modelsStatus.whisper_models.map((wm) => {
+                        {modelsStatus.whisper_models
+                          .filter(
+                            (wm) =>
+                              sttLangFilter === 'all' ||
+                              getWhisperLanguageGroup(wm) === sttLangFilter
+                          )
+                          .map((wm) => {
                           const isSelected = activeWhisperModel === wm.id;
                           return (
                             <div
@@ -1892,6 +1943,10 @@ export const SessionDialogModal: React.FC<SessionDialogModalProps> = ({
   );
   const [retranscribe, setRetranscribe] = useState<boolean>(false);
   const [isDragging, setIsDragging] = useState(false);
+  const [sessionSttLangFilter, setSessionSttLangFilter] =
+    useState<SttLanguageFilter>(() =>
+      getWhisperLanguageGroup({ id: initialWhisperModel || 'small' })
+    );
 
   useEffect(() => {
     if (isOpen) {
@@ -1899,7 +1954,9 @@ export const SessionDialogModal: React.FC<SessionDialogModalProps> = ({
       setSessionType(initialSessionType || 'file');
       setSelectedFile(null);
       setExpectedSpeakers('0');
-      setWhisperModel(initialWhisperModel || 'small');
+      const initW = initialWhisperModel || 'small';
+      setWhisperModel(initW);
+      setSessionSttLangFilter(getWhisperLanguageGroup({ id: initW }));
       setClarificationModel(initialClarificationModel || 'whisper-context');
       setTranslationModel(initialTranslationModel || 'opus-mt-da-en');
       setTargetLanguage(initialTargetLanguage || 'en');
@@ -1922,13 +1979,22 @@ export const SessionDialogModal: React.FC<SessionDialogModalProps> = ({
   const isEdit = mode === 'edit';
   const downloadedWhispers =
     modelsStatus?.whisper_models.filter((w) => w.downloaded) || [];
-  const whisperOptions =
+  const allWhisperOptions =
     downloadedWhispers.length > 0
       ? downloadedWhispers
       : modelsStatus?.whisper_models || [
           { id: 'tiny', name: 'Whisper Tiny', size_mb: '110', description: '', downloaded: true },
           { id: 'small', name: 'Whisper Small', size_mb: '610', description: '', downloaded: true },
         ];
+  const filteredWhisperOptions = allWhisperOptions.filter(
+    (wm) =>
+      sessionSttLangFilter === 'all' ||
+      getWhisperLanguageGroup(wm) === sessionSttLangFilter
+  );
+  const whisperOptions =
+    filteredWhisperOptions.length > 0
+      ? filteredWhisperOptions
+      : allWhisperOptions;
 
   const downloadedClarifiers =
     (
@@ -2254,9 +2320,46 @@ export const SessionDialogModal: React.FC<SessionDialogModalProps> = ({
 
           {/* 5. AI Models & Output Language Selection for this Session */}
           <div className="rounded-xl bg-slate-950/60 border border-slate-800 p-3.5 space-y-3">
-            <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-              <Cpu className="w-3.5 h-3.5 text-blue-400" />
-              <span>{t('sessionModelsHeader')}</span>
+            <div className="flex flex-wrap items-center justify-between gap-2 pb-1 border-b border-slate-800/80">
+              <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                <Cpu className="w-3.5 h-3.5 text-blue-400" />
+                <span>{t('sessionModelsHeader')}</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] font-semibold text-slate-400">
+                  STT Category:
+                </span>
+                <select
+                  value={sessionSttLangFilter}
+                  onChange={(e) => {
+                    const nextFilter = e.target.value as SttLanguageFilter;
+                    setSessionSttLangFilter(nextFilter);
+                    const nextList = allWhisperOptions.filter(
+                      (wm) =>
+                        nextFilter === 'all' ||
+                        getWhisperLanguageGroup(wm) === nextFilter
+                    );
+                    if (
+                      nextList.length > 0 &&
+                      !nextList.some((w) => w.id === whisperModel)
+                    ) {
+                      setWhisperModel(nextList[0].id);
+                      if (isEdit && hasExistingAudio) {
+                        setRetranscribe(true);
+                      }
+                    }
+                  }}
+                  className="bg-slate-900 border border-slate-700 hover:border-blue-500/60 rounded-lg px-2 py-1 text-[11px] font-semibold text-blue-300 focus:outline-none focus:border-blue-500 cursor-pointer"
+                >
+                  <option value="multilingual">
+                    Multi-Language (Standard Whisper)
+                  </option>
+                  <option value="da">
+                    Dansk (DA) — Hviske & Røst
+                  </option>
+                  <option value="all">All Downloaded Models</option>
+                </select>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
@@ -2435,6 +2538,8 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
   const [pathSavedNotice, setPathSavedNotice] = useState(false);
   const [pathError, setPathError] = useState<string | null>(null);
   const [selectedWhisper, setSelectedWhisper] = useState<string>('small');
+  const [onboardingSttFilter, setOnboardingSttFilter] =
+    useState<SttLanguageFilter>('multilingual');
   const [selectedClarifier, setSelectedClarifier] =
     useState<string>('whisper-context');
   const [selectedTranslator, setSelectedTranslator] =
@@ -2752,12 +2857,37 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {/* Stage 2: Whisper Speech-to-Text */}
                 <div className="p-4 rounded-2xl bg-slate-950/60 border border-slate-800 space-y-2.5">
-                  <div className="flex items-center gap-2 text-xs font-bold text-white">
-                    <Cpu className="w-4 h-4 text-blue-400" />
-                    <span>{t('chooseSttModel')}</span>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 text-xs font-bold text-white">
+                      <Cpu className="w-4 h-4 text-blue-400" />
+                      <span>{t('chooseSttModel')}</span>
+                    </div>
+                    <select
+                      value={onboardingSttFilter}
+                      onChange={(e) =>
+                        setOnboardingSttFilter(
+                          e.target.value as SttLanguageFilter
+                        )
+                      }
+                      className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-[11px] font-semibold text-blue-300 focus:outline-none focus:border-blue-500 cursor-pointer"
+                    >
+                      <option value="multilingual">
+                        Multi-Language (Standard Whisper)
+                      </option>
+                      <option value="da">
+                        Dansk (DA) — Hviske & Røst
+                      </option>
+                      <option value="all">All Models</option>
+                    </select>
                   </div>
                   <div className="space-y-2">
-                    {modelsStatus.whisper_models.map((wm) => {
+                    {modelsStatus.whisper_models
+                      .filter(
+                        (wm) =>
+                          onboardingSttFilter === 'all' ||
+                          getWhisperLanguageGroup(wm) === onboardingSttFilter
+                      )
+                      .map((wm) => {
                       const isSel = selectedWhisper === wm.id;
                       return (
                         <div
