@@ -41,11 +41,26 @@ export interface AudioDevice {
   type: 'microphone' | 'loopback';
 }
 
+export interface SystemSpecsRecommendation {
+  cpu_name: string;
+  cpu_threads: number;
+  total_ram_gb: number;
+  avail_ram_gb: number;
+  tier: 'high' | 'balanced' | 'light' | string;
+  tier_label: string;
+  recommended_multilingual_id: string;
+  recommended_danish_id: string;
+  recommended_clarifier_id: string;
+  recommended_whisper_ids: string[];
+  summary: string;
+}
+
 export interface ModelsStatus {
   storage_directory?: string;
   models_directory: string;
   sessions_directory?: string;
   needs_onboarding?: boolean;
+  system_specs?: SystemSpecsRecommendation;
   whisper_models: WhisperModelInfo[];
   clarification_models?: ClarificationModelInfo[];
   translation_models: TranslationModelInfo[];

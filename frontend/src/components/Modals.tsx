@@ -671,6 +671,105 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                 )}
 
+                {/* System Specs & Hardware-Based AI Model Recommendations Banner */}
+                {modelsStatus.system_specs && (
+                  <div className="p-4 rounded-2xl bg-indigo-950/30 border border-indigo-500/35 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-600 text-white">
+                          <Cpu className="w-3 h-3" />
+                          <span>
+                            Hardware Recommendation: {modelsStatus.system_specs.tier_label}
+                          </span>
+                        </span>
+                        <span className="text-xs font-mono text-indigo-200/90">
+                          {modelsStatus.system_specs.cpu_name} &bull;{' '}
+                          {modelsStatus.system_specs.cpu_threads} Threads &bull;{' '}
+                          {modelsStatus.system_specs.total_ram_gb} GB RAM
+                        </span>
+                      </div>
+                    </div>
+
+                    <p className="text-xs text-slate-300 leading-relaxed">
+                      {modelsStatus.system_specs.summary}
+                    </p>
+
+                    <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                      {(() => {
+                        const recMultiId =
+                          modelsStatus.system_specs?.recommended_multilingual_id ||
+                          'small';
+                        const recMultiObj = modelsStatus.whisper_models.find(
+                          (w) => w.id === recMultiId
+                        );
+                        const recDaId =
+                          modelsStatus.system_specs?.recommended_danish_id ||
+                          'hviske-v2';
+                        const recDaObj = modelsStatus.whisper_models.find(
+                          (w) => w.id === recDaId
+                        );
+                        return (
+                          <>
+                            {recMultiObj && (
+                              <button
+                                type="button"
+                                disabled={isBusy || !!downloadingKey}
+                                onClick={() => {
+                                  setSttLangFilter('multilingual');
+                                  if (recMultiObj.downloaded) {
+                                    onSelectWhisperModel?.(recMultiObj.id);
+                                  } else {
+                                    startDownloadWithPolling(
+                                      recMultiObj.id,
+                                      'whisper',
+                                      recMultiObj.id
+                                    );
+                                  }
+                                }}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-semibold transition shadow-sm"
+                              >
+                                <Sparkles className="w-3.5 h-3.5" />
+                                <span>
+                                  {recMultiObj.downloaded
+                                    ? `Use Recommended Multi-Language: ${recMultiObj.name.split('—')[0].trim()}`
+                                    : `Download Recommended Multi-Language: ${recMultiObj.name.split('—')[0].trim()}`}
+                                </span>
+                              </button>
+                            )}
+
+                            {recDaObj && (
+                              <button
+                                type="button"
+                                disabled={isBusy || !!downloadingKey}
+                                onClick={() => {
+                                  setSttLangFilter('da');
+                                  if (recDaObj.downloaded) {
+                                    onSelectWhisperModel?.(recDaObj.id);
+                                  } else {
+                                    startDownloadWithPolling(
+                                      recDaObj.id,
+                                      'whisper',
+                                      recDaObj.id
+                                    );
+                                  }
+                                }}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-semibold transition shadow-sm"
+                              >
+                                <Sparkles className="w-3.5 h-3.5" />
+                                <span>
+                                  {recDaObj.downloaded
+                                    ? `Use Recommended Danish (DA): ${recDaObj.name.split('—')[0].trim()}`
+                                    : `Download Recommended Danish (DA): ${recDaObj.name.split('—')[0].trim()}`}
+                                </span>
+                              </button>
+                            )}
+                          </>
+                        );
+                      })()}
+                    </div>
+                  </div>
+                )}
+
                 {/* 4-Step Pipeline Layout — Spacious 2x2 Grid of Clean Stacked Cards */}
                 <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-stretch">
                   {/* SECTION 1: Step 1 — Audio In & Speakers */}
@@ -822,6 +921,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           )
                           .map((wm) => {
                           const isSelected = activeWhisperModel === wm.id;
+                          const isRecommendedForPc =
+                            modelsStatus.system_specs?.recommended_whisper_ids?.includes(
+                              wm.id
+                            ) ?? false;
                           return (
                             <div
                               key={wm.id}
@@ -833,19 +936,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                               className={`p-3.5 rounded-xl border transition space-y-2 ${
                                 isSelected
                                   ? 'bg-blue-950/30 border-blue-500/60 shadow-md shadow-blue-500/10'
+                                  : isRecommendedForPc
+                                  ? 'bg-slate-900/95 border-indigo-500/45 hover:border-indigo-400/70'
                                   : 'bg-slate-900/90 border-slate-800 hover:border-slate-700'
                               } ${wm.downloaded ? 'cursor-pointer' : ''}`}
                             >
-                              {/* Row 1: Full Model Title + ACTIVE Badge */}
+                              {/* Row 1: Full Model Title + Recommended / ACTIVE Badges */}
                               <div className="flex items-start justify-between gap-2">
                                 <span className="text-xs font-bold text-white leading-snug">
                                   {wm.name}
                                 </span>
-                                {isSelected && (
-                                  <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-blue-600 text-white shrink-0">
-                                    ACTIVE
-                                  </span>
-                                )}
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  {isRecommendedForPc && (
+                                    <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-indigo-600 text-white">
+                                      ★ Recommended for your PC
+                                    </span>
+                                  )}
+                                  {isSelected && (
+                                    <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-blue-600 text-white">
+                                      ACTIVE
+                                    </span>
+                                  )}
+                                </div>
                               </div>
 
                               {/* Row 2: Description */}

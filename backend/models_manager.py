@@ -412,6 +412,116 @@ def delete_local_model(model_type: str, model_id: str = "") -> None:
             config.SPEAKER_EMBEDDING_MODEL_PATH.unlink(missing_ok=True)
 
 
+def get_system_hardware_recommendations() -> Dict:
+    """Detect local CPU threads and RAM via standard library and return tailored model recommendations."""
+    import ctypes
+    import os
+    import platform
+    import sys
+
+    cpu_threads = os.cpu_count() or 4
+    cpu_name = platform.processor() or "x64 Processor"
+    total_ram_gb = 8.0
+    avail_ram_gb = 4.0
+
+    if sys.platform == "win32":
+        try:
+            import winreg
+
+            key = winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"HARDWARE\Description\System\CentralProcessor\0",
+            )
+            val, _ = winreg.QueryValueEx(key, "ProcessorNameString")
+            if val and str(val).strip():
+                cpu_name = str(val).strip()
+        except Exception:
+            pass
+
+        try:
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("sullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            stat = MEMORYSTATUSEX()
+            stat.dwLength = ctypes.sizeof(stat)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+                total_ram_gb = round(stat.ullTotalPhys / (1024**3), 1)
+                avail_ram_gb = round(stat.ullAvailPhys / (1024**3), 1)
+        except Exception:
+            pass
+    else:
+        try:
+            if Path("/proc/meminfo").exists():
+                for line in Path("/proc/meminfo").read_text().splitlines():
+                    if line.startswith("MemTotal:"):
+                        kb = int(line.split()[1])
+                        total_ram_gb = round(kb / (1024**2), 1)
+                    elif line.startswith("MemAvailable:"):
+                        kb = int(line.split()[1])
+                        avail_ram_gb = round(kb / (1024**2), 1)
+        except Exception:
+            pass
+
+    if total_ram_gb >= 15.0 and cpu_threads >= 8:
+        tier = "high"
+        tier_label = "High-Performance Workstation"
+        rec_multilingual = "turbo"
+        rec_danish = "hviske-v2-int8"
+        rec_clarifier = "whisper-context"
+        recommended_ids = ["turbo", "large-v3", "hviske-v2-int8", "roest-v3-315m"]
+        summary = (
+            f"Your PC has strong specs ({cpu_threads} threads, {total_ram_gb} GB RAM) and can easily run the "
+            "largest high-precision models: 'Hviske v2 High-Precision (INT8)' or 'Røst v3 315M (FP16)' for Danish, "
+            "and 'Whisper Large-v3-Turbo' or 'Large-v3 Full' for multi-language."
+        )
+    elif total_ram_gb >= 7.5 and cpu_threads >= 6:
+        tier = "balanced"
+        tier_label = "Balanced Desktop / Laptop"
+        rec_multilingual = "small"
+        rec_danish = "hviske-v2"
+        rec_clarifier = "whisper-context"
+        recommended_ids = ["small", "hviske-v2", "roest-v3-315m"]
+        summary = (
+            f"Your PC ({cpu_threads} threads, {total_ram_gb} GB RAM) is well-suited for 'Hviske v2 (Q4)' or "
+            "'Røst v3 315M' for Danish, and 'Whisper Small' for fast multi-language transcription."
+        )
+    else:
+        tier = "light"
+        tier_label = "Lightweight Laptop / Low-Memory PC"
+        rec_multilingual = "base"
+        rec_danish = "roest-315m"
+        rec_clarifier = "whisper-context"
+        recommended_ids = ["base", "small", "roest-315m"]
+        summary = (
+            f"For smooth performance on {cpu_threads} threads and {total_ram_gb} GB RAM, we recommend "
+            "'Røst 315M (~303 MB)' for fast Danish transcription and 'Whisper Base / Small' for multi-language."
+        )
+
+    return {
+        "cpu_name": cpu_name,
+        "cpu_threads": cpu_threads,
+        "total_ram_gb": total_ram_gb,
+        "avail_ram_gb": avail_ram_gb,
+        "tier": tier,
+        "tier_label": tier_label,
+        "recommended_multilingual_id": rec_multilingual,
+        "recommended_danish_id": rec_danish,
+        "recommended_clarifier_id": rec_clarifier,
+        "recommended_whisper_ids": recommended_ids,
+        "summary": summary,
+    }
+
+
 def get_models_status() -> Dict:
     """Return readiness status of all local AI models for the UI."""
     # Auto-clean legacy broken whisper-onnx-hviske-v2-fp16 folder if present on disk/network share
@@ -469,6 +579,7 @@ def get_models_status() -> Dict:
         "models_directory": str(config.MODELS_DIR),
         "sessions_directory": str(config.SESSIONS_DIR),
         "needs_onboarding": not (spk_ready and any_whisper_ready),
+        "system_specs": get_system_hardware_recommendations(),
         "whisper_models": whisper_list,
         "clarification_models": clarification_list,
         "translation_models": translation_list,
