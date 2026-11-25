@@ -718,6 +718,10 @@ export function App() {
               viewMode={transcriptViewMode}
               onChangeViewMode={setTranscriptViewMode}
               onPlaySegment={handlePlaySegment}
+              onSessionUpdated={(updated) => {
+                setActiveSession(updated);
+                fetchSessions().then(setSessionsList).catch(() => {});
+              }}
               onOpenEditSession={() => openEditSessionDialog(activeSession)}
               onResumeSession={async () => {
                 if (!activeSession) return;

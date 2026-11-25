@@ -12,8 +12,9 @@ import {
   Radio,
   RefreshCw,
   Square,
+  X,
 } from 'lucide-react';
-import { openSessionAudioFolder } from '../api';
+import { openSessionAudioFolder, updateTurnText } from '../api';
 import { useI18n } from '../i18n';
 import {
   AudioDevice,
@@ -32,6 +33,7 @@ interface TranscriptFeedProps {
   viewMode: TranscriptViewMode;
   onChangeViewMode: (mode: TranscriptViewMode) => void;
   onPlaySegment: (segment: TranscriptSegment) => void;
+  onSessionUpdated?: (updated: MeetingSession) => void;
   onOpenEditSession?: () => void;
   onReprocessSession?: () => void;
   onResumeSession?: () => void;
@@ -121,6 +123,7 @@ export const TranscriptFeed: React.FC<TranscriptFeedProps> = ({
   viewMode,
   onChangeViewMode,
   onPlaySegment,
+  onSessionUpdated,
   onOpenEditSession,
   onReprocessSession,
   onResumeSession,
@@ -135,6 +138,40 @@ export const TranscriptFeed: React.FC<TranscriptFeedProps> = ({
 }) => {
   const { t } = useI18n();
   const [copiedWord, setCopiedWord] = useState(false);
+  const [editingTurnId, setEditingTurnId] = useState<string | null>(null);
+  const [editingText, setEditingText] = useState<string>('');
+  const [editingSpeakerId, setEditingSpeakerId] = useState<string>('');
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+
+  const speakersList = Object.values(session.speakers).sort((a, b) => {
+    const numA = parseInt(a.id.replace('speaker_', ''), 10) || 999;
+    const numB = parseInt(b.id.replace('speaker_', ''), 10) || 999;
+    return numA - numB;
+  });
+
+  const handleStartEditTurn = (turn: GroupedTurn, currentText: string) => {
+    setEditingTurnId(turn.firstSegment.id);
+    setEditingText(currentText);
+    setEditingSpeakerId(turn.speakerId);
+  };
+
+  const handleSaveEditTurn = async (turn: GroupedTurn) => {
+    if (!editingTurnId || isSavingEdit) return;
+    setIsSavingEdit(true);
+    try {
+      const updated = await updateTurnText(session.id, {
+        segment_ids: turn.segments.map((s) => s.id),
+        text: editingText,
+        view_mode: viewMode,
+        speaker_id: editingSpeakerId || turn.speakerId,
+      });
+      onSessionUpdated?.(updated);
+      setEditingTurnId(null);
+    } catch (_) {
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
 
   const isTranslationSkipped =
     session.target_language === 'none' || session.translation_model === 'none';
@@ -515,30 +552,132 @@ export const TranscriptFeed: React.FC<TranscriptFeedProps> = ({
                   ? turn.correctedParagraph
                   : turn.translatedParagraph;
 
+              const isEditingThisTurn =
+                editingTurnId === turn.firstSegment.id;
+
               return (
                 <div
                   key={`${turn.firstSegment.id}-${idx}`}
                   className={`group rounded-xl transition ${
-                    isTurnPlaying ? 'bg-blue-950/30 -mx-3 px-3 py-2' : ''
+                    isEditingThisTurn
+                      ? 'bg-slate-800/90 border border-blue-500/60 -mx-3 px-4 py-3 shadow-lg'
+                      : isTurnPlaying
+                      ? 'bg-blue-950/30 -mx-3 px-3 py-2'
+                      : 'hover:bg-slate-800/40 -mx-3 px-3 py-1.5'
                   }`}
                 >
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="font-bold text-sm text-white tracking-tight">
-                      {turn.speakerName}:
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => onPlaySegment(turn.firstSegment)}
-                      className="opacity-0 group-hover:opacity-100 select-none inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-800 hover:bg-blue-600 text-[10px] text-slate-300 hover:text-white transition"
-                      title="Play audio from this paragraph"
-                    >
-                      <Play className="w-2.5 h-2.5 fill-current" />
-                      <span>{formatTime(turn.firstSegment.start)}</span>
-                    </button>
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <div className="flex items-center gap-2">
+                      {isEditingThisTurn && speakersList.length > 0 ? (
+                        <select
+                          value={editingSpeakerId}
+                          onChange={(e) => setEditingSpeakerId(e.target.value)}
+                          className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs font-bold text-white focus:outline-none focus:border-blue-500"
+                        >
+                          {speakersList.map((spk) => (
+                            <option key={spk.id} value={spk.id}>
+                              {spk.name}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span className="font-bold text-sm text-white tracking-tight">
+                          {turn.speakerName}:
+                        </span>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => onPlaySegment(turn.firstSegment)}
+                        className={`${
+                          isEditingThisTurn
+                            ? 'opacity-100'
+                            : 'opacity-0 group-hover:opacity-100'
+                        } select-none inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-800 hover:bg-blue-600 text-[10px] text-slate-300 hover:text-white transition`}
+                        title="Play audio from this paragraph"
+                      >
+                        <Play className="w-2.5 h-2.5 fill-current" />
+                        <span>{formatTime(turn.firstSegment.start)}</span>
+                      </button>
+
+                      {!isEditingThisTurn && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleStartEditTurn(turn, paragraphText)
+                          }
+                          className="opacity-0 group-hover:opacity-100 select-none inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-800 hover:bg-indigo-600 text-[10px] text-slate-300 hover:text-white transition"
+                          title="Edit this paragraph text"
+                        >
+                          <Edit2 className="w-2.5 h-2.5" />
+                          <span>Edit</span>
+                        </button>
+                      )}
+                    </div>
+
+                    {isEditingThisTurn && (
+                      <div className="flex items-center gap-1.5 select-none">
+                        <button
+                          type="button"
+                          disabled={isSavingEdit}
+                          onClick={() => handleSaveEditTurn(turn)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-semibold transition shadow-sm"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                          <span>Save</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isSavingEdit}
+                          onClick={() => setEditingTurnId(null)}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium border border-slate-700 transition"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                          <span>Cancel</span>
+                        </button>
+                      </div>
+                    )}
                   </div>
-                  <p className="text-sm text-slate-100 leading-relaxed whitespace-pre-wrap">
-                    {paragraphText}
-                  </p>
+
+                  {isEditingThisTurn ? (
+                    <div className="space-y-1.5 mt-1.5">
+                      <textarea
+                        value={editingText}
+                        onChange={(e) => setEditingText(e.target.value)}
+                        onKeyDown={(e) => {
+                          if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                            e.preventDefault();
+                            handleSaveEditTurn(turn);
+                          } else if (e.key === 'Escape') {
+                            e.preventDefault();
+                            setEditingTurnId(null);
+                          }
+                        }}
+                        rows={Math.max(
+                          2,
+                          Math.min(10, Math.ceil(editingText.length / 85))
+                        )}
+                        autoFocus
+                        className="w-full bg-slate-950 border border-blue-500/60 focus:border-blue-500 rounded-xl p-3 text-sm text-slate-100 leading-relaxed focus:outline-none resize-y"
+                      />
+                      <div className="text-[10px] text-slate-400 select-none flex items-center justify-between">
+                        <span>
+                          Press <strong>Ctrl + Enter</strong> to save or{' '}
+                          <strong>Esc</strong> to cancel
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <p
+                      onDoubleClick={() =>
+                        handleStartEditTurn(turn, paragraphText)
+                      }
+                      title="Double-click or click Edit to modify text"
+                      className="text-sm text-slate-100 leading-relaxed whitespace-pre-wrap"
+                    >
+                      {paragraphText}
+                    </p>
+                  )}
                 </div>
               );
             })}

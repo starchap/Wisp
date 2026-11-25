@@ -742,6 +742,84 @@ def api_reassign_segment_speaker(
     return session.to_dict()
 
 
+class UpdateTurnTextRequest(BaseModel):
+    segment_ids: List[str]
+    text: str
+    view_mode: str = "corrected"  # "original" | "corrected" | "translated"
+    speaker_id: Optional[str] = None
+
+
+@app.patch("/api/sessions/{session_id}/turns")
+def api_update_turn_text(session_id: str, req: UpdateTurnTextRequest):
+    """
+    Allow manual proof-reading and editing of a speaker turn paragraph directly in the UI.
+    Persists the edited text (and optional speaker reassignment) immediately to `session.json`.
+    """
+    session = store.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    id_set = set(req.segment_ids or [])
+    matching = [s for s in session.segments if s.id in id_set]
+    if not matching:
+        raise HTTPException(status_code=404, detail="Turn segments not found")
+
+    clean_text = req.text.strip()
+    first_seg = matching[0]
+    last_seg = matching[-1]
+    first_seg.end = max(first_seg.end, last_seg.end)
+
+    if req.speaker_id and req.speaker_id.strip():
+        spk = store.ensure_speaker(session, req.speaker_id.strip())
+        first_seg.speaker_id = spk.id
+
+    is_trans_skipped = (
+        not session.target_language
+        or session.target_language == "none"
+        or session.translation_model == "none"
+        or first_seg.source_language == session.target_language
+    )
+
+    if len(matching) > 1:
+        # Collapse the consecutive sub-segments of this turn into `first_seg` so the user's
+        # edited paragraph is stored as a single clean segment spanning [first.start, last.end]
+        first_seg.raw_text = " ".join(
+            (s.raw_text or s.original_text or "").strip() for s in matching
+        ).strip()
+        first_seg.original_text = " ".join(
+            (s.original_text or s.raw_text or "").strip() for s in matching
+        ).strip()
+        first_seg.translated_text = " ".join(
+            (s.translated_text or s.original_text or "").strip() for s in matching
+        ).strip()
+        extra_ids = {s.id for s in matching[1:]}
+        session.segments = [s for s in session.segments if s.id not in extra_ids]
+
+    if req.view_mode == "original":
+        first_seg.raw_text = clean_text
+        if not first_seg.original_text:
+            first_seg.original_text = clean_text
+    elif req.view_mode == "corrected":
+        first_seg.original_text = clean_text
+        if is_trans_skipped:
+            first_seg.translated_text = clean_text
+        else:
+            first_seg.translated_text = pipeline.translator.translate(
+                clean_text,
+                source_lang=first_seg.source_language,
+                target_lang=session.target_language,
+                translation_model=session.translation_model,
+            )
+    else:
+        first_seg.translated_text = clean_text
+        if is_trans_skipped:
+            first_seg.original_text = clean_text
+
+    store.save_session(session)
+    broadcast_event("session_updated", session.to_dict())
+    return session.to_dict()
+
+
 # ---------------------------------------------------------------------------
 # Audio File Upload & Batch Diarization + Transcription + Translation
 # ---------------------------------------------------------------------------

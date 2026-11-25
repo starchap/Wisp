@@ -422,3 +422,23 @@ export async function resumeSessionAudio(sessionId: string): Promise<void> {
     throw new Error('Failed to resume transcription');
   }
 }
+
+export async function updateTurnText(
+  sessionId: string,
+  payload: {
+    segment_ids: string[];
+    text: string;
+    view_mode: 'original' | 'corrected' | 'translated';
+    speaker_id?: string;
+  }
+): Promise<MeetingSession> {
+  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/turns`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error('Failed to save edited text');
+  }
+  return res.json();
+}
