@@ -28,11 +28,14 @@ from config import (
 )
 from diarization import LocalSpeakerDiarizer
 from models_manager import (
+    ensure_whisper_model,
     get_clarification_model_dir,
     get_opus_pair_dir,
+    get_whisper_onnx_paths,
     is_clarification_model_downloaded,
     is_nllb_model_downloaded,
     is_opus_pair_downloaded,
+    is_whisper_model_downloaded,
     resolve_local_whisper_model,
 )
 from session_store import (
@@ -975,32 +978,72 @@ class WhisperONNXRunner:
     """
 
     def __init__(self, model_id: str):
+        if model_id == "hviske-v2-fp16":
+            model_id = "hviske-v2-int8"
         self.model_id = model_id
-        paths = resolve_local_whisper_model(model_id)
-        engine_str = str(paths.get("engine", ""))
-        self.is_hf_onnx = engine_str == "hf-whisper-onnx"
-        self.is_wav2vec2_onnx = engine_str == "wav2vec2-onnx"
+        try:
+            paths = resolve_local_whisper_model(model_id)
+        except FileNotFoundError:
+            paths = ensure_whisper_model(model_id)
+
         sess_opts = ort.SessionOptions()
         sess_opts.intra_op_num_threads = 4
-        self.encoder = ort.InferenceSession(
-            str(paths["encoder"]),
-            sess_options=sess_opts,
-            providers=["CPUExecutionProvider"],
-        )
+        try:
+            engine_str = str(paths.get("engine", ""))
+            self.is_hf_onnx = engine_str == "hf-whisper-onnx"
+            self.is_wav2vec2_onnx = engine_str == "wav2vec2-onnx"
+            self.encoder = ort.InferenceSession(
+                str(paths["encoder"]),
+                sess_options=sess_opts,
+                providers=["CPUExecutionProvider"],
+            )
+            if self.is_wav2vec2_onnx:
+                self.decoder = None
+            else:
+                self.decoder = ort.InferenceSession(
+                    str(paths["decoder"]),
+                    sess_options=sess_opts,
+                    providers=["CPUExecutionProvider"],
+                )
+        except Exception as load_err:
+            print(f"[WhisperONNXRunner] Failed loading '{model_id}' ({load_err}); attempting fallback model...")
+            fallback_loaded = False
+            for candidate_id in ("hviske-v2-int8", "hviske-v2", "roest-v3-315m", "roest-315m", "turbo", "small", "base", "tiny"):
+                if candidate_id == model_id or not is_whisper_model_downloaded(candidate_id):
+                    continue
+                try:
+                    paths = get_whisper_onnx_paths(candidate_id)
+                    engine_str = str(paths.get("engine", ""))
+                    self.is_hf_onnx = engine_str == "hf-whisper-onnx"
+                    self.is_wav2vec2_onnx = engine_str == "wav2vec2-onnx"
+                    self.encoder = ort.InferenceSession(
+                        str(paths["encoder"]),
+                        sess_options=sess_opts,
+                        providers=["CPUExecutionProvider"],
+                    )
+                    if self.is_wav2vec2_onnx:
+                        self.decoder = None
+                    else:
+                        self.decoder = ort.InferenceSession(
+                            str(paths["decoder"]),
+                            sess_options=sess_opts,
+                            providers=["CPUExecutionProvider"],
+                        )
+                    self.model_id = candidate_id
+                    fallback_loaded = True
+                    break
+                except Exception:
+                    continue
+            if not fallback_loaded:
+                raise load_err
+
         if self.is_wav2vec2_onnx:
-            self.decoder = None
-            vocab_raw = json.loads(paths["tokens"].read_text(encoding="utf-8"))
+            vocab_raw = json.loads(paths["tokens"].read_text(encoding="utf-8-sig"))
             self.w2v_inv_vocab: Dict[int, str] = {int(v): k for k, v in vocab_raw.items()}
             self.is_multilingual = False
             self.tokens_map = {}
             self._by_first_byte = {}
             return
-
-        self.decoder = ort.InferenceSession(
-            str(paths["decoder"]),
-            sess_options=sess_opts,
-            providers=["CPUExecutionProvider"],
-        )
 
         if self.is_hf_onnx:
             self.hf_tokenizer = Tokenizer.from_file(str(paths["tokens"]))

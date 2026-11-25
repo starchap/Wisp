@@ -753,6 +753,7 @@ async def api_upload_recording(
             )
             broadcast_event("session_updated", session.to_dict())
         except Exception as exc:
+            broadcast_event("session_updated", session.to_dict())
             broadcast_event(
                 "upload_progress",
                 {"session_id": session_id, "message": f"Error: {exc}", "percent": 100, "error": str(exc)},

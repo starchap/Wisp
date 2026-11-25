@@ -292,6 +292,8 @@ def ensure_whisper_model(model_id: str = DEFAULT_WHISPER_MODEL) -> Dict[str, Pat
     """Ensure the specified Whisper ONNX INT8 model is stored locally."""
     if model_id == "large-v3-turbo":
         model_id = "turbo"
+    elif model_id == "hviske-v2-fp16":
+        model_id = "hviske-v2-int8"
     if model_id not in WHISPER_MAP:
         model_id = DEFAULT_WHISPER_MODEL
 
@@ -412,6 +414,14 @@ def delete_local_model(model_type: str, model_id: str = "") -> None:
 
 def get_models_status() -> Dict:
     """Return readiness status of all local AI models for the UI."""
+    # Auto-clean legacy broken whisper-onnx-hviske-v2-fp16 folder if present on disk/network share
+    legacy_fp16_dir = config.MODELS_DIR / "whisper-onnx-hviske-v2-fp16"
+    if legacy_fp16_dir.exists():
+        try:
+            shutil.rmtree(legacy_fp16_dir, ignore_errors=True)
+        except Exception:
+            pass
+
     whisper_list: List[Dict] = []
     for m in WHISPER_MODELS:
         whisper_list.append(

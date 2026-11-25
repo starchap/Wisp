@@ -207,7 +207,7 @@ class SessionStore:
             meta_file = folder / "session.json"
             if meta_file.exists():
                 try:
-                    data = json.loads(meta_file.read_text(encoding="utf-8"))
+                    data = json.loads(meta_file.read_text(encoding="utf-8-sig"))
                     speakers = {
                         k: SpeakerProfile(**v) for k, v in data.get("speakers", {}).items()
                     }
@@ -221,6 +221,19 @@ class SessionStore:
                         )
                         for s in data.get("segments", [])
                     ]
+                    raw_w_model = data.get("whisper_model", DEFAULT_WHISPER_MODEL)
+                    if raw_w_model == "hviske-v2-fp16":
+                        raw_w_model = "hviske-v2-int8"
+                    audio_fname = data.get("audio_filename", "recording.wav")
+                    dur = float(data.get("duration", 0.0) or 0.0)
+                    wav_path = folder / audio_fname
+                    if dur <= 0.0 and wav_path.exists():
+                        try:
+                            w_size = wav_path.stat().st_size
+                            if w_size > 44:
+                                dur = round((w_size - 44) / float(SAMPLE_RATE * 2), 2)
+                        except Exception:
+                            pass
                     session = MeetingSession(
                         id=data["id"],
                         title=data.get("title", "Untitled Meeting"),
@@ -229,7 +242,7 @@ class SessionStore:
                         session_type=data.get("session_type", "file"),
                         source_file_name=data.get("source_file_name", ""),
                         target_language=data.get("target_language", "en"),
-                        whisper_model=data.get("whisper_model", DEFAULT_WHISPER_MODEL),
+                        whisper_model=raw_w_model,
                         clarification_model=data.get(
                             "clarification_model", DEFAULT_CLARIFICATION_MODEL
                         ),
@@ -241,8 +254,8 @@ class SessionStore:
                             for c in data.get("spoken_languages", [])
                             if c and c not in ("auto", "none")
                         ],
-                        duration=data.get("duration", 0.0),
-                        audio_filename=data.get("audio_filename", "recording.wav"),
+                        duration=dur,
+                        audio_filename=audio_fname,
                         speakers=speakers,
                         segments=segments,
                         embeddings=data.get("embeddings", {}),
