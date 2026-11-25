@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   AlertCircle,
+  ArrowLeftRight,
   ArrowRight,
   Check,
   CheckCircle2,
@@ -8,6 +9,7 @@ import {
   Cpu,
   Download,
   FileAudio,
+  FileText,
   FolderOpen,
   GitMerge,
   Globe,
@@ -36,6 +38,8 @@ import {
   fetchExportText,
   fetchModelsStatus,
   triggerModelDownload,
+  updateDiarizationModel,
+  updateGpuAcceleration,
   updateStoragePath,
 } from '../api';
 import { ThemeMode, UILanguage, UI_LANGUAGES, useI18n } from '../i18n';
@@ -54,19 +58,62 @@ export type SettingsTab =
   | 'audio'
   | 'about';
 
-export type SttLanguageFilter = 'multilingual' | 'da' | 'all';
+export type SttLanguageFilter =
+  | 'multilingual'
+  | 'da'
+  | 'en'
+  | 'sv'
+  | 'no'
+  | 'de'
+  | 'es'
+  | 'fr'
+  | 'it'
+  | 'custom'
+  | 'all';
+
+const STT_LANGUAGE_GROUP_OPTIONS: {
+  value: Exclude<SttLanguageFilter, 'all' | 'custom'>;
+  label: string;
+}[] = [
+  { value: 'multilingual', label: 'Multi-Language — Standard Whisper (Default)' },
+  { value: 'da', label: 'Dansk (DA) — Danish Specialists (Hviske & Røst)' },
+  { value: 'en', label: 'English (EN) — Distil-Whisper Specialist' },
+  { value: 'sv', label: 'Svenska (SV) — KB-Whisper Specialist' },
+  { value: 'no', label: 'Norsk (NO) — NB-Whisper Specialist' },
+  { value: 'de', label: 'Deutsch (DE) — German Turbo Specialist' },
+  { value: 'es', label: 'Español (ES) — Spanish Specialist' },
+  { value: 'fr', label: 'Français (FR) — French Specialist' },
+  { value: 'it', label: 'Italiano (IT) — Italian Specialist' },
+];
 
 function getWhisperLanguageGroup(wm: {
   id: string;
   language_group?: string;
-}): 'multilingual' | 'da' {
-  if (
-    wm.language_group === 'da' ||
-    wm.id.startsWith('hviske') ||
-    wm.id.startsWith('roest')
-  ) {
-    return 'da';
+}): Exclude<SttLanguageFilter, 'all'> {
+  if (wm.language_group === 'custom' || wm.id.startsWith('custom:')) {
+    return 'custom';
   }
+  const known: Exclude<SttLanguageFilter, 'all' | 'custom'>[] = [
+    'da',
+    'en',
+    'sv',
+    'no',
+    'de',
+    'es',
+    'fr',
+    'it',
+  ];
+  if (wm.language_group && (known as string[]).includes(wm.language_group)) {
+    return wm.language_group as Exclude<SttLanguageFilter, 'all' | 'custom'>;
+  }
+  if (wm.id.startsWith('hviske') || wm.id.startsWith('roest')) return 'da';
+  if (wm.id.startsWith('distil-')) return 'en';
+  if (wm.id.startsWith('kb-whisper')) return 'sv';
+  if (wm.id.startsWith('nb-whisper')) return 'no';
+  if (wm.id.endsWith('-de')) return 'de';
+  if (wm.id.endsWith('-es')) return 'es';
+  if (wm.id.endsWith('-fr')) return 'fr';
+  if (wm.id.endsWith('-it')) return 'it';
   return 'multilingual';
 }
 
@@ -95,6 +142,7 @@ interface SettingsModalProps {
   onSelectTranslationModel?: (modelId: string) => void;
   onModelsStatusUpdated?: (status: ModelsStatus) => void;
   onOpenOnboardingWizard?: () => void;
+  onOpenEulaViewer?: () => void;
   onClose: () => void;
 }
 
@@ -295,6 +343,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onSelectTranslationModel,
   onModelsStatusUpdated,
   onOpenOnboardingWizard,
+  onOpenEulaViewer,
   onClose,
 }) => {
   const { t, uiLanguage, setUiLanguage, theme, setTheme } = useI18n();
@@ -303,6 +352,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [sttLangFilter, setSttLangFilter] =
     useState<SttLanguageFilter>('multilingual');
+  const [clarifyLangFilter, setClarifyLangFilter] = useState<string>('all');
+  const [transFromLang, setTransFromLang] = useState<string>('da');
+  const [transToLang, setTransToLang] = useState<string>('en');
+  const [activeModelSubTab, setActiveModelSubTab] = useState<
+    'splitters' | 'transcribes' | 'clarifications' | 'translations'
+  >('transcribes');
   const modelsStatus = rawModelsStatus || FALLBACK_MODELS_STATUS;
 
   useEffect(() => {
@@ -331,12 +386,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       | 'speaker'
       | 'clarification'
       | 'opus'
+      | 'opus_pair'
       | 'nllb'
       | 'all_recommended'
       | 'onboarding',
     whisperId?: string,
     translationId?: string,
-    clarificationId?: string
+    clarificationId?: string,
+    speakerId?: string,
+    opusPairs?: string[]
   ) => {
     setDownloadError(null);
     setDownloadingKey(key);
@@ -345,7 +403,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         modelType,
         whisperId,
         translationId,
-        clarificationId
+        clarificationId,
+        speakerId,
+        opusPairs
       );
       const startedAt = Date.now();
       const timer = setInterval(async () => {
@@ -357,11 +417,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               st.whisper_models.some(
                 (w) => w.id === whisperId && w.downloaded
               )) ||
-            (modelType === 'speaker' && st.speaker_diarization.downloaded) ||
+            (modelType === 'speaker' &&
+              (speakerId
+                ? (st.speaker_diarization_models || []).some(
+                    (s) => s.id === speakerId && s.downloaded
+                  )
+                : st.speaker_diarization.downloaded)) ||
             (modelType === 'clarification' &&
               (st.clarification_models || []).some(
                 (c) => c.id === clarificationId && c.downloaded
               )) ||
+            (modelType === 'opus_pair' &&
+              !!opusPairs &&
+              opusPairs.every((p) => st.opus_pairs_status?.[p]?.downloaded)) ||
             (modelType === 'opus' &&
               (st.translation_models || []).some(
                 (m) => m.id === 'opus-mt-da-en' && m.downloaded
@@ -679,100 +747,121 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-indigo-600 text-white shadow-sm">
                           <Cpu className="w-3.5 h-3.5" />
                           <span>
-                            Hardware Recommendation: {modelsStatus.system_specs.tier_label}
+                            {modelsStatus.system_specs.tier_label}
                           </span>
                         </span>
                         <span className="inline-flex items-center px-2.5 py-1 rounded-lg bg-slate-900/90 border border-indigo-500/30 text-[11px] font-mono font-semibold text-slate-200">
                           {modelsStatus.system_specs.cpu_name} &bull;{' '}
                           {modelsStatus.system_specs.cpu_threads} Threads &bull;{' '}
                           {modelsStatus.system_specs.total_ram_gb} GB RAM
+                          {modelsStatus.system_specs.gpu_name
+                            ? ` • ${modelsStatus.system_specs.gpu_name}`
+                            : ''}
                         </span>
                       </div>
-                    </div>
 
-                    <p className="text-xs text-slate-200 leading-relaxed font-medium">
-                      {modelsStatus.system_specs.summary}
-                    </p>
-
-                    <div className="flex flex-wrap items-center gap-2 pt-0.5">
-                      {(() => {
-                        const recMultiId =
-                          modelsStatus.system_specs?.recommended_multilingual_id ||
-                          'small';
-                        const recMultiObj = modelsStatus.whisper_models.find(
-                          (w) => w.id === recMultiId
-                        );
-                        const recDaId =
-                          modelsStatus.system_specs?.recommended_danish_id ||
-                          'hviske-v2';
-                        const recDaObj = modelsStatus.whisper_models.find(
-                          (w) => w.id === recDaId
-                        );
-                        return (
-                          <>
-                            {recMultiObj && (
-                              <button
-                                type="button"
-                                disabled={isBusy || !!downloadingKey}
-                                onClick={() => {
-                                  setSttLangFilter('multilingual');
-                                  if (recMultiObj.downloaded) {
-                                    onSelectWhisperModel?.(recMultiObj.id);
-                                  } else {
-                                    startDownloadWithPolling(
-                                      recMultiObj.id,
-                                      'whisper',
-                                      recMultiObj.id
-                                    );
-                                  }
-                                }}
-                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-semibold transition shadow-sm"
-                              >
-                                <Sparkles className="w-3.5 h-3.5" />
-                                <span>
-                                  {recMultiObj.downloaded
-                                    ? `Use Recommended Multi-Language: ${recMultiObj.name.split('—')[0].trim()}`
-                                    : `Download Recommended Multi-Language: ${recMultiObj.name.split('—')[0].trim()}`}
-                                </span>
-                              </button>
-                            )}
-
-                            {recDaObj && (
-                              <button
-                                type="button"
-                                disabled={isBusy || !!downloadingKey}
-                                onClick={() => {
-                                  setSttLangFilter('da');
-                                  if (recDaObj.downloaded) {
-                                    onSelectWhisperModel?.(recDaObj.id);
-                                  } else {
-                                    startDownloadWithPolling(
-                                      recDaObj.id,
-                                      'whisper',
-                                      recDaObj.id
-                                    );
-                                  }
-                                }}
-                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-semibold transition shadow-sm"
-                              >
-                                <Sparkles className="w-3.5 h-3.5" />
-                                <span>
-                                  {recDaObj.downloaded
-                                    ? `Use Recommended Danish (DA): ${recDaObj.name.split('—')[0].trim()}`
-                                    : `Download Recommended Danish (DA): ${recDaObj.name.split('—')[0].trim()}`}
-                                </span>
-                              </button>
-                            )}
-                          </>
-                        );
-                      })()}
+                      {modelsStatus.system_specs.gpu_detected && (
+                        <label
+                          className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-900/90 border border-indigo-500/30 cursor-pointer select-none hover:border-blue-500/60 transition shrink-0"
+                          title={
+                            modelsStatus.system_specs.gpu_provider
+                              ? `Active ONNX GPU provider: ${modelsStatus.system_specs.gpu_provider} (with automatic safe CPU fallback)`
+                              : 'GPU detected — uses ONNX GPU acceleration when available with automatic safe CPU fallback'
+                          }
+                        >
+                          <input
+                            type="checkbox"
+                            checked={
+                              modelsStatus.system_specs
+                                .gpu_acceleration_enabled ?? true
+                            }
+                            onChange={async (e) => {
+                              try {
+                                const next = await updateGpuAcceleration(
+                                  e.target.checked
+                                );
+                                onModelsStatusUpdated?.(next);
+                              } catch (_) {}
+                            }}
+                            className="h-3.5 w-3.5 rounded border-slate-600 bg-slate-950 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                          />
+                          <span className="text-xs font-semibold text-slate-200">
+                            GPU Acceleration
+                          </span>
+                          <span className="text-[10px] font-mono text-emerald-400">
+                            {modelsStatus.system_specs.gpu_acceleration_enabled
+                              ? modelsStatus.system_specs.gpu_provider
+                                ? modelsStatus.system_specs.gpu_provider.replace(
+                                    'ExecutionProvider',
+                                    ''
+                                  )
+                                : 'Auto (CPU fallback)'
+                              : 'CPU'}
+                          </span>
+                        </label>
+                      )}
                     </div>
                   </div>
                 )}
 
-                {/* 4-Step Pipeline Layout — Spacious 2x2 Grid of Clean Stacked Cards */}
-                <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-stretch">
-                  {/* SECTION 1: Step 1 — Audio In & Speakers */}
+                {/* Clean 4-Tab AI Pipeline Navigation: SpeechSplitters | Transcribes | Clarifications | Translations */}
+                <div className="flex flex-wrap items-center gap-1.5 p-1.5 rounded-xl bg-slate-950/80 border border-slate-800">
+                  {(
+                    [
+                      {
+                        id: 'splitters',
+                        label: '1. SpeechSplitters',
+                        icon: Users,
+                        activeClass:
+                          'bg-indigo-600 text-white shadow-sm',
+                      },
+                      {
+                        id: 'transcribes',
+                        label: '2. Transcribes',
+                        icon: Cpu,
+                        activeClass:
+                          'bg-blue-600 text-white shadow-sm',
+                      },
+                      {
+                        id: 'clarifications',
+                        label: '3. Clarifications',
+                        icon: Sparkles,
+                        activeClass:
+                          'bg-amber-600 text-white shadow-sm',
+                      },
+                      {
+                        id: 'translations',
+                        label: '4. Translations',
+                        icon: Languages,
+                        activeClass:
+                          'bg-emerald-600 text-white shadow-sm',
+                      },
+                    ] as const
+                  ).map((tab) => {
+                    const Icon = tab.icon;
+                    const isActive = activeModelSubTab === tab.id;
+                    return (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        onClick={() => setActiveModelSubTab(tab.id)}
+                        className={`flex-1 min-w-[130px] inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition ${
+                          isActive
+                            ? tab.activeClass
+                            : 'text-slate-400 hover:text-white hover:bg-slate-800/70'
+                        }`}
+                      >
+                        <Icon className="w-3.5 h-3.5 shrink-0" />
+                        <span>{tab.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Single-View Active Pipeline Tab */}
+                <div className="space-y-4">
+                  {/* TAB 1: SpeechSplitters — Audio In & Speakers */}
+                  {activeModelSubTab === 'splitters' && (
                   <div className="rounded-2xl bg-slate-950/60 border border-slate-800 p-4 flex flex-col justify-between">
                     <div className="space-y-3">
                       <div className="flex items-center justify-between gap-2">
@@ -792,82 +881,150 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         <code className="text-slate-200">Speaker 2</code>, etc.).
                       </p>
 
-                      <div className="p-3.5 rounded-xl bg-slate-900 border border-indigo-500/30 space-y-3">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="text-xs font-bold text-white leading-snug">
-                              {modelsStatus.speaker_diarization.name}
-                            </div>
-                            <div className="text-[11px] text-indigo-300 mt-0.5 font-medium">
-                              Active Diarization Model
-                            </div>
-                          </div>
-                          <span className="text-[10px] font-mono text-slate-400 bg-slate-800 px-2 py-0.5 rounded-md shrink-0">
-                            ~{modelsStatus.speaker_diarization.size_mb} MB
-                          </span>
-                        </div>
-
-                        <p className="text-[11px] text-slate-400 leading-relaxed">
-                          Extracts acoustic voice embeddings locally via
-                          ONNX Runtime to cluster distinct voices.
-                        </p>
-
-                        <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between gap-2">
-                          {modelsStatus.speaker_diarization.downloaded ? (
-                            <>
-                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-400 text-[11px] font-semibold border border-emerald-500/30">
-                                <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                                <span>{t('readyOffline')}</span>
-                              </span>
-                              <button
-                                type="button"
-                                disabled={isBusy}
-                                title={t('deleteModelTooltip')}
-                                onClick={async (e) => {
-                                  e.stopPropagation();
-                                  try {
-                                    const next =
-                                      await deleteLocalModel('speaker');
-                                    onModelsStatusUpdated?.(next);
-                                  } catch (_) {}
-                                }}
-                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-rose-600/20 text-slate-400 hover:text-rose-400 border border-slate-700/80 hover:border-rose-500/40 text-[11px] font-semibold disabled:opacity-40 transition"
-                              >
-                                <Trash2 className="w-3 h-3 shrink-0" />
-                                <span>{t('deleteModel')}</span>
-                              </button>
-                            </>
-                          ) : (
-                            <button
-                              disabled={isBusy || downloadingKey === 'speaker'}
-                              onClick={() =>
-                                startDownloadWithPolling('speaker', 'speaker')
-                              }
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-semibold transition"
+                      <div className="space-y-2.5">
+                        {(
+                          modelsStatus.speaker_diarization_models &&
+                          modelsStatus.speaker_diarization_models.length > 0
+                            ? modelsStatus.speaker_diarization_models
+                            : [
+                                {
+                                  id: modelsStatus.speaker_diarization.id,
+                                  name: modelsStatus.speaker_diarization.name,
+                                  description:
+                                    'Extracts acoustic voice embeddings locally via ONNX Runtime to cluster distinct voices.',
+                                  size_mb:
+                                    modelsStatus.speaker_diarization.size_mb,
+                                  type: 'onnx',
+                                  downloaded:
+                                    modelsStatus.speaker_diarization.downloaded,
+                                  local_path:
+                                    modelsStatus.speaker_diarization.local_path,
+                                },
+                              ]
+                        ).map((sm) => {
+                          const activeDiarId =
+                            modelsStatus.active_diarization_model ||
+                            modelsStatus.speaker_diarization.id;
+                          const isSelected = activeDiarId === sm.id;
+                          const isRec = sm.id === 'campplus-voxceleb';
+                          return (
+                            <div
+                              key={sm.id}
+                              onClick={async () => {
+                                if (!sm.downloaded || isSelected) return;
+                                try {
+                                  const next = await updateDiarizationModel(
+                                    sm.id
+                                  );
+                                  onModelsStatusUpdated?.(next);
+                                } catch (_) {}
+                              }}
+                              className={`p-3.5 rounded-xl border transition space-y-2 ${
+                                isSelected
+                                  ? 'bg-indigo-950/30 border-indigo-500/60 shadow-md shadow-indigo-500/10'
+                                  : 'bg-slate-900/90 border-slate-800 hover:border-slate-700'
+                              } ${sm.downloaded ? 'cursor-pointer' : ''}`}
                             >
-                              {downloadingKey === 'speaker' ? (
-                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              ) : (
-                                <Download className="w-3.5 h-3.5" />
-                              )}
-                              <span>
-                                {downloadingKey === 'speaker'
-                                  ? 'Downloading...'
-                                  : `${t('download')} (~${modelsStatus.speaker_diarization.size_mb} MB)`}
-                              </span>
-                            </button>
-                          )}
-                        </div>
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+                                  <span className="text-xs font-bold text-white leading-snug">
+                                    {sm.name}
+                                  </span>
+                                  {isRec && (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 shrink-0">
+                                      <Sparkles className="w-2.5 h-2.5" />
+                                      Recommended
+                                    </span>
+                                  )}
+                                </div>
+                                {isSelected && (
+                                  <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-indigo-600 text-white shrink-0">
+                                    ACTIVE
+                                  </span>
+                                )}
+                              </div>
+
+                              <p className="text-[11px] text-slate-400 leading-relaxed">
+                                {sm.description}
+                              </p>
+
+                              <div className="pt-2 border-t border-slate-800/70 flex items-center justify-between gap-2">
+                                <span className="text-[10px] font-mono text-slate-400 bg-slate-800/90 px-2 py-0.5 rounded-md">
+                                  {Number(sm.size_mb) > 0
+                                    ? `~${sm.size_mb} MB`
+                                    : '0 MB'}
+                                </span>
+
+                                {sm.downloaded ? (
+                                  <div className="flex items-center gap-2">
+                                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-400 text-[11px] font-semibold border border-emerald-500/30">
+                                      <CheckCircle2 className="w-3 h-3 shrink-0" />
+                                      <span>{t('readyOffline')}</span>
+                                    </span>
+                                    {sm.id !== 'none' && (
+                                      <button
+                                        type="button"
+                                        disabled={isBusy}
+                                        title={t('deleteModelTooltip')}
+                                        onClick={async (e) => {
+                                          e.stopPropagation();
+                                          try {
+                                            const next = await deleteLocalModel(
+                                              'speaker',
+                                              sm.id
+                                            );
+                                            onModelsStatusUpdated?.(next);
+                                          } catch (_) {}
+                                        }}
+                                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-rose-600/20 text-slate-400 hover:text-rose-400 border border-slate-700/80 hover:border-rose-500/40 text-[11px] font-semibold disabled:opacity-40 transition"
+                                      >
+                                        <Trash2 className="w-3 h-3 shrink-0" />
+                                        <span>{t('deleteModel')}</span>
+                                      </button>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <button
+                                    disabled={
+                                      isBusy ||
+                                      downloadingKey === `speaker:${sm.id}`
+                                    }
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      startDownloadWithPolling(
+                                        `speaker:${sm.id}`,
+                                        'speaker',
+                                        undefined,
+                                        undefined,
+                                        undefined,
+                                        sm.id
+                                      );
+                                    }}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-[11px] font-semibold shrink-0 transition"
+                                  >
+                                    {downloadingKey === `speaker:${sm.id}` ? (
+                                      <Loader2 className="w-3 h-3 animate-spin" />
+                                    ) : (
+                                      <Download className="w-3 h-3" />
+                                    )}
+                                    <span>
+                                      {downloadingKey === `speaker:${sm.id}`
+                                        ? 'Downloading...'
+                                        : `${t('download')} (~${sm.size_mb} MB)`}
+                                    </span>
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
-
-                    <div className="mt-4 pt-3 border-t border-slate-800/80 text-[11px] text-slate-500 flex items-center justify-between">
-                      <span>Output: Speaker ID + Audio Slice</span>
-                      <ArrowRight className="w-4 h-4 text-indigo-400" />
-                    </div>
                   </div>
+                  )}
 
-                  {/* SECTION 2: Step 2 — Speech-to-Text Models */}
+                  {/* TAB 2: Transcribes — Speech-to-Text Models */}
+                  {activeModelSubTab === 'transcribes' && (
                   <div className="rounded-2xl bg-slate-950/60 border border-slate-800 p-4 flex flex-col justify-between">
                     <div className="space-y-3">
                       <div className="flex items-center justify-between gap-2">
@@ -900,12 +1057,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           }
                           className="flex-1 min-w-[210px] bg-slate-950 border border-slate-700 hover:border-blue-500/60 focus:border-blue-500 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-white focus:outline-none cursor-pointer"
                         >
-                          <option value="multilingual">
-                            Multi-Language — Standard Whisper (Default)
-                          </option>
-                          <option value="da">
-                            Dansk (DA) — Danish Specialists (Hviske & Røst)
-                          </option>
+                          {STT_LANGUAGE_GROUP_OPTIONS.map((opt) => (
+                            <option key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </option>
+                          ))}
+                          {modelsStatus.whisper_models.some(
+                            (w) => getWhisperLanguageGroup(w) === 'custom'
+                          ) && (
+                            <option value="custom">
+                              Custom / Local ONNX Models (
+                              {
+                                modelsStatus.whisper_models.filter(
+                                  (w) => getWhisperLanguageGroup(w) === 'custom'
+                                ).length
+                              }
+                              )
+                            </option>
+                          )}
                           <option value="all">
                             All Speech-to-Text Models ({modelsStatus.whisper_models.length})
                           </option>
@@ -1043,14 +1212,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         })}
                       </div>
                     </div>
-
-                    <div className="mt-4 pt-3 border-t border-slate-800/80 text-[11px] text-slate-500 flex items-center justify-between">
-                      <span>Output: Raw Spoken Text</span>
-                      <ArrowRight className="w-4 h-4 text-blue-400" />
-                    </div>
                   </div>
+                  )}
 
-                  {/* SECTION 3: Step 3 — Context Word Clarification Models (3rd Model) */}
+                  {/* TAB 3: Clarifications — Context Word Clarification Models */}
+                  {activeModelSubTab === 'clarifications' && (
                   <div className="rounded-2xl bg-slate-950/60 border border-slate-800 p-4 flex flex-col justify-between">
                     <div className="space-y-3">
                       <div className="flex items-center justify-between gap-2">
@@ -1067,15 +1233,57 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         {t('stepClarifyDesc')}
                       </p>
 
+                      {/* Language / Category Filter Dropdown for Clarifiers */}
+                      <div className="p-2.5 rounded-xl bg-slate-900/90 border border-slate-800 flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-[11px] font-semibold text-slate-300 flex items-center gap-1.5">
+                          <Globe className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                          <span>Model Language:</span>
+                        </span>
+                        <select
+                          value={clarifyLangFilter}
+                          onChange={(e) => setClarifyLangFilter(e.target.value)}
+                          className="flex-1 min-w-[210px] bg-slate-950 border border-slate-700 hover:border-amber-500/60 focus:border-amber-500 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-white focus:outline-none cursor-pointer"
+                        >
+                          <option value="all">All Languages (All Models)</option>
+                          <option value="da">Dansk (DA) — Danish &amp; Nordic</option>
+                          <option value="en">English (EN)</option>
+                          <option value="sv">Svenska (SV) — Swedish</option>
+                          <option value="no">Norsk (NO) — Norwegian</option>
+                          <option value="de">Deutsch (DE) — German</option>
+                          <option value="es">Español (ES) — Spanish</option>
+                          <option value="fr">Français (FR) — French</option>
+                          <option value="it">Italiano (IT) — Italian</option>
+                          <option value="multilingual">Multilingual (Global / 24 EU)</option>
+                        </select>
+                      </div>
+
                       <div className="space-y-2.5">
                         {(
                           modelsStatus.clarification_models ||
                           FALLBACK_MODELS_STATUS.clarification_models ||
                           []
-                        ).map((cm) => {
+                        )
+                          .filter((cm) => {
+                            if (clarifyLangFilter === 'all') return true;
+                            const sup = (cm.supported_languages || cm.language_group || 'all')
+                              .split(',')
+                              .map((s) => s.trim().toLowerCase())
+                              .filter(Boolean);
+                            return sup.includes('all') || sup.includes(clarifyLangFilter);
+                          })
+                          .map((cm) => {
                           const isSelected =
-                            (activeClarificationModel || 'whisper-context') ===
-                            cm.id;
+                            (activeClarificationModel || 'none') === cm.id;
+                          const langBadgeMap: Record<string, string> = {
+                            da: 'DA Specialist',
+                            eu: '24 EU Languages',
+                            en: 'EN Specialist',
+                            'west-eu': 'EN / DE / FR / ES / IT',
+                            multilingual: 'Multilingual',
+                          };
+                          const langBadge = cm.language_group
+                            ? langBadgeMap[cm.language_group]
+                            : undefined;
                           return (
                             <div
                               key={cm.id}
@@ -1093,11 +1301,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                   : 'bg-slate-900/90 border-slate-800 hover:border-slate-700'
                               } ${cm.downloaded ? 'cursor-pointer' : ''}`}
                             >
-                              {/* Row 1: Full Model Title + ACTIVE Badge */}
+                              {/* Row 1: Full Model Title + Language / Recommended / ACTIVE Badges */}
                               <div className="flex items-start justify-between gap-2">
-                                <span className="text-xs font-bold text-white leading-snug">
-                                  {cm.name}
-                                </span>
+                                <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+                                  <span className="text-xs font-bold text-white leading-snug">
+                                    {cm.name}
+                                  </span>
+                                  {langBadge && (
+                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-amber-500/15 text-amber-300 border border-amber-500/30 shrink-0">
+                                      {langBadge}
+                                    </span>
+                                  )}
+                                  {modelsStatus.system_specs
+                                    ?.recommended_clarifier_id === cm.id && (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 shrink-0">
+                                      <Sparkles className="w-2.5 h-2.5" />
+                                      Recommended for your PC
+                                    </span>
+                                  )}
+                                </div>
                                 {isSelected && (
                                   <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-600 text-white shrink-0">
                                     ACTIVE
@@ -1191,164 +1413,501 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         })}
                       </div>
                     </div>
-
-                    <div className="mt-4 pt-3 border-t border-slate-800/80 text-[11px] text-slate-500 flex items-center justify-between">
-                      <span>{t('stepClarifyFooter')}</span>
-                      <ArrowRight className="w-4 h-4 text-amber-400" />
-                    </div>
                   </div>
+                  )}
 
-                  {/* SECTION 4: Step 4 — Local AI Translation Models */}
-                  <div className="rounded-2xl bg-slate-950/60 border border-slate-800 p-4 flex flex-col justify-between">
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                          <Languages className="w-3.5 h-3.5" />
-                          {t('step4TranslateBadge')}
-                        </span>
-                        <span className="text-[11px] text-slate-500">
-                          Neural Translation
-                        </span>
-                      </div>
+                  {/* TAB 4: Translations — Local AI Translation Models */}
+                  {activeModelSubTab === 'translations' && (() => {
+                    const pairLangs = [
+                      { code: 'da', label: 'Dansk (DA)' },
+                      { code: 'en', label: 'English (EN)' },
+                      { code: 'sv', label: 'Svenska (SV)' },
+                      { code: 'no', label: 'Norsk (NO)' },
+                      { code: 'de', label: 'Deutsch (DE)' },
+                      { code: 'es', label: 'Español (ES)' },
+                      { code: 'fr', label: 'Français (FR)' },
+                      { code: 'it', label: 'Italiano (IT)' },
+                    ];
+                    const opusMap = modelsStatus.opus_pairs_status || {};
+                    const directKey = `${transFromLang}-${transToLang}`;
+                    const hasDirect = Boolean(opusMap[directKey]);
+                    const isSameLang = transFromLang === transToLang;
+                    const pivotA = `${transFromLang}-en`;
+                    const pivotB = `en-${transToLang}`;
+                    const hasPivot =
+                      !isSameLang &&
+                      !hasDirect &&
+                      transFromLang !== 'en' &&
+                      transToLang !== 'en' &&
+                      Boolean(opusMap[pivotA]) &&
+                      Boolean(opusMap[pivotB]);
+                    const requiredPairs = hasDirect
+                      ? [directKey]
+                      : hasPivot
+                      ? [pivotA, pivotB]
+                      : [];
+                    const pairReady =
+                      requiredPairs.length > 0 &&
+                      requiredPairs.every((p) => opusMap[p]?.downloaded);
+                    const pairSizeMb = requiredPairs.length * 85;
+                    const pairDownloadKey = `opus_pair:${requiredPairs.join('+')}`;
+                    const downloadedOpusPairs = Object.values(opusMap).filter(
+                      (p) => p.downloaded
+                    );
+                    const isOpusActive =
+                      activeTranslationModel === 'opus-mt-da-en';
+                    const universalModels = (
+                      modelsStatus.translation_models || []
+                    ).filter(
+                      (tm) =>
+                        tm.id !== 'opus-mt-da-en' &&
+                        (tm.id !== 'whisper-native' || transToLang === 'en')
+                    );
 
-                      <p className="text-xs text-slate-400 leading-relaxed">
-                        Translates each speaker&apos;s validated text into
-                        your single chosen Output Language (or skip translation).
-                      </p>
+                    return (
+                      <div className="rounded-2xl bg-slate-950/60 border border-slate-800 p-4 space-y-4">
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                              <Languages className="w-3.5 h-3.5" />
+                              {t('step4TranslateBadge')}
+                            </span>
+                            <span className="text-[11px] text-slate-500">
+                              Neural Translation
+                            </span>
+                          </div>
 
-                      <div className="space-y-2.5">
-                        {(modelsStatus.translation_models || []).map((tm) => {
-                          const isSelected = activeTranslationModel === tm.id;
-                          return (
-                            <div
-                              key={tm.id}
-                              onClick={() => {
-                                if (
-                                  tm.downloaded &&
-                                  onSelectTranslationModel
-                                ) {
-                                  onSelectTranslationModel(tm.id);
-                                }
-                              }}
-                              className={`p-3.5 rounded-xl border transition space-y-2 ${
-                                isSelected
-                                  ? 'bg-emerald-950/25 border-emerald-500/60 shadow-md shadow-emerald-500/10'
-                                  : 'bg-slate-900/90 border-slate-800 hover:border-slate-700'
-                              } ${tm.downloaded ? 'cursor-pointer' : ''}`}
-                            >
-                              {/* Row 1: Full Model Title + ACTIVE Badge */}
-                              <div className="flex items-start justify-between gap-2">
-                                <span className="text-xs font-bold text-white leading-snug">
-                                  {tm.name}
-                                </span>
-                                {isSelected && (
-                                  <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-600 text-white shrink-0">
-                                    ACTIVE
-                                  </span>
-                                )}
+                          {/* Language Pair Selector (From A ⇄ To B) */}
+                          <div className="p-3.5 rounded-xl bg-slate-900/80 border border-slate-800 space-y-3">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <div className="flex-1 min-w-[130px]">
+                                <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                                  From Language (A)
+                                </label>
+                                <select
+                                  value={transFromLang}
+                                  onChange={(e) =>
+                                    setTransFromLang(e.target.value)
+                                  }
+                                  className="w-full px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-xs text-white focus:outline-none focus:border-emerald-500"
+                                >
+                                  {pairLangs.map((l) => (
+                                    <option key={l.code} value={l.code}>
+                                      {l.label}
+                                    </option>
+                                  ))}
+                                </select>
                               </div>
 
-                              {/* Row 2: Description */}
-                              <p className="text-[11px] text-slate-400 leading-relaxed">
-                                {tm.description}
-                              </p>
+                              <button
+                                type="button"
+                                title="Swap languages"
+                                onClick={() => {
+                                  const prevFrom = transFromLang;
+                                  setTransFromLang(transToLang);
+                                  setTransToLang(prevFrom);
+                                }}
+                                className="mt-4 p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition shrink-0"
+                              >
+                                <ArrowLeftRight className="w-3.5 h-3.5" />
+                              </button>
 
-                              {/* Row 3: Action Footer */}
-                              <div className="pt-2 border-t border-slate-800/70 flex items-center justify-between gap-2">
-                                <span className="text-[10px] font-mono text-slate-400 bg-slate-800/90 px-2 py-0.5 rounded-md">
-                                  {Number(tm.size_mb) > 0
-                                    ? `~${tm.size_mb} MB`
-                                    : '0 MB extra'}
-                                </span>
-
-                                {tm.downloaded ? (
-                                  <div className="flex items-center gap-2">
-                                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-400 text-[11px] font-semibold border border-emerald-500/30">
-                                      <CheckCircle2 className="w-3 h-3 shrink-0" />
-                                      <span>{t('readyOffline')}</span>
-                                    </span>
-                                    {tm.id !== 'whisper-native' &&
-                                      tm.id !== 'none' && (
-                                        <button
-                                          type="button"
-                                          disabled={isBusy}
-                                          title={t('deleteModelTooltip')}
-                                          onClick={async (e) => {
-                                            e.stopPropagation();
-                                            try {
-                                              const next =
-                                                await deleteLocalModel(
-                                                  'translation',
-                                                  tm.id
-                                                );
-                                              onModelsStatusUpdated?.(next);
-                                              if (
-                                                isSelected &&
-                                                onSelectTranslationModel
-                                              ) {
-                                                const fallback = (
-                                                  next.translation_models || []
-                                                ).find(
-                                                  (m) =>
-                                                    m.downloaded &&
-                                                    m.id !== tm.id
-                                                );
-                                                if (fallback) {
-                                                  onSelectTranslationModel(
-                                                    fallback.id
-                                                  );
-                                                }
-                                              }
-                                            } catch (_) {}
-                                          }}
-                                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-rose-600/20 text-slate-400 hover:text-rose-400 border border-slate-700/80 hover:border-rose-500/40 text-[11px] font-semibold disabled:opacity-40 transition"
-                                        >
-                                          <Trash2 className="w-3 h-3 shrink-0" />
-                                          <span>{t('deleteModel')}</span>
-                                        </button>
-                                      )}
-                                  </div>
-                                ) : (
-                                  <button
-                                    disabled={
-                                      isBusy || downloadingKey === tm.id
-                                    }
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      startDownloadWithPolling(
-                                        tm.id,
-                                        tm.id === 'opus-mt-da-en'
-                                          ? 'opus'
-                                          : 'nllb'
-                                      );
-                                    }}
-                                    className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-[11px] font-semibold shrink-0 transition"
-                                  >
-                                    {downloadingKey === tm.id ? (
-                                      <Loader2 className="w-3 h-3 animate-spin" />
-                                    ) : (
-                                      <Download className="w-3 h-3" />
-                                    )}
-                                    <span>
-                                      {downloadingKey === tm.id
-                                        ? 'Downloading...'
-                                        : `${t('download')} (~${tm.size_mb} MB)`}
-                                    </span>
-                                  </button>
-                                )}
+                              <div className="flex-1 min-w-[130px]">
+                                <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                                  To Language (B)
+                                </label>
+                                <select
+                                  value={transToLang}
+                                  onChange={(e) =>
+                                    setTransToLang(e.target.value)
+                                  }
+                                  className="w-full px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-xs text-white focus:outline-none focus:border-emerald-500"
+                                >
+                                  {pairLangs.map((l) => (
+                                    <option key={l.code} value={l.code}>
+                                      {l.label}
+                                    </option>
+                                  ))}
+                                </select>
                               </div>
                             </div>
-                          );
-                        })}
-                      </div>
-                    </div>
 
-                    <div className="mt-4 pt-3 border-t border-slate-800/80 text-[11px] text-emerald-400 font-medium flex items-center justify-between">
-                      <span>Final Output: Plain Text Ready for Word</span>
-                      <CheckCircle2 className="w-4 h-4" />
+                            {/* Optimized Specialist Card for A -> B */}
+                            {isSameLang ? (
+                              <div className="text-[11px] text-slate-400 py-1">
+                                Select two different languages to see optimized
+                                pair models.
+                              </div>
+                            ) : requiredPairs.length > 0 ? (
+                              <div
+                                onClick={() => {
+                                  if (pairReady && onSelectTranslationModel) {
+                                    onSelectTranslationModel('opus-mt-da-en');
+                                  }
+                                }}
+                                className={`p-3 rounded-xl border transition space-y-2 ${
+                                  isOpusActive && pairReady
+                                    ? 'bg-emerald-950/25 border-emerald-500/60 shadow-md shadow-emerald-500/10'
+                                    : 'bg-slate-950/80 border-slate-800 hover:border-slate-700'
+                                } ${pairReady ? 'cursor-pointer' : ''}`}
+                              >
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className="flex flex-wrap items-center gap-1.5">
+                                    <span className="text-xs font-bold text-white">
+                                      OPUS-MT {transFromLang.toUpperCase()} →{' '}
+                                      {transToLang.toUpperCase()}{' '}
+                                      {hasDirect
+                                        ? 'Direct Specialist'
+                                        : 'Pivot Specialist (via EN)'}
+                                    </span>
+                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                                      {hasDirect
+                                        ? 'Direct Pair'
+                                        : `${transFromLang.toUpperCase()} → EN → ${transToLang.toUpperCase()}`}
+                                    </span>
+                                  </div>
+                                  {isOpusActive && pairReady && (
+                                    <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-600 text-white shrink-0">
+                                      ACTIVE
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-[11px] text-slate-400">
+                                  {hasDirect
+                                    ? `Fast Helsinki-NLP MarianMT neural translator specialized directly for ${transFromLang.toUpperCase()} → ${transToLang.toUpperCase()}.`
+                                    : `Uses two compact Helsinki-NLP OPUS-MT specialists (${pivotA.toUpperCase()} + ${pivotB.toUpperCase()}) for fast offline translation.`}
+                                </p>
+                                <div className="pt-2 border-t border-slate-800/70 flex items-center justify-between gap-2">
+                                  <span className="text-[10px] font-mono text-slate-400 bg-slate-800/90 px-2 py-0.5 rounded-md">
+                                    ~{pairSizeMb} MB
+                                  </span>
+                                  {pairReady ? (
+                                    <div className="flex items-center gap-2">
+                                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-400 text-[11px] font-semibold border border-emerald-500/30">
+                                        <CheckCircle2 className="w-3 h-3 shrink-0" />
+                                        <span>{t('readyOffline')}</span>
+                                      </span>
+                                      <button
+                                        type="button"
+                                        disabled={isBusy}
+                                        title={t('deleteModelTooltip')}
+                                        onClick={async (e) => {
+                                          e.stopPropagation();
+                                          try {
+                                            let next = modelsStatus;
+                                            for (const p of requiredPairs) {
+                                              next = await deleteLocalModel(
+                                                'opus_pair',
+                                                p
+                                              );
+                                            }
+                                            onModelsStatusUpdated?.(next);
+                                          } catch (_) {}
+                                        }}
+                                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-rose-600/20 text-slate-400 hover:text-rose-400 border border-slate-700/80 hover:border-rose-500/40 text-[11px] font-semibold disabled:opacity-40 transition"
+                                      >
+                                        <Trash2 className="w-3 h-3 shrink-0" />
+                                        <span>{t('deleteModel')}</span>
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      disabled={
+                                        isBusy ||
+                                        downloadingKey === pairDownloadKey
+                                      }
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        startDownloadWithPolling(
+                                          pairDownloadKey,
+                                          'opus_pair',
+                                          undefined,
+                                          'opus-mt-da-en',
+                                          undefined,
+                                          undefined,
+                                          requiredPairs
+                                        );
+                                      }}
+                                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-[11px] font-semibold shrink-0 transition"
+                                    >
+                                      {downloadingKey === pairDownloadKey ? (
+                                        <Loader2 className="w-3 h-3 animate-spin" />
+                                      ) : (
+                                        <Download className="w-3 h-3" />
+                                      )}
+                                      <span>
+                                        {downloadingKey === pairDownloadKey
+                                          ? 'Downloading...'
+                                          : `${t('download')} (~${pairSizeMb} MB)`}
+                                      </span>
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="text-[11px] text-slate-400 py-1">
+                                Use <strong>Meta NLLB-200 Universal</strong>{' '}
+                                below for this language pair.
+                              </div>
+                            )}
+
+                            {/* Downloaded OPUS-MT Pairs Summary */}
+                            {downloadedOpusPairs.length > 0 && (
+                              <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                                <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
+                                  Downloaded pairs:
+                                </span>
+                                {downloadedOpusPairs.map((p) => (
+                                  <span
+                                    key={p.pair}
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-300 border border-emerald-500/25 text-[10px] font-mono"
+                                  >
+                                    {p.pair.toUpperCase()}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Universal / Multilanguage Section */}
+                          <div className="pt-1 space-y-2.5">
+                            <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                              Universal / Multilanguage &amp; Options
+                            </div>
+                            {universalModels.map((tm) => {
+                              const isSelected =
+                                activeTranslationModel === tm.id;
+                              return (
+                                <div
+                                  key={tm.id}
+                                  onClick={() => {
+                                    if (
+                                      tm.downloaded &&
+                                      onSelectTranslationModel
+                                    ) {
+                                      onSelectTranslationModel(tm.id);
+                                    }
+                                  }}
+                                  className={`p-3.5 rounded-xl border transition space-y-2 ${
+                                    isSelected
+                                      ? 'bg-emerald-950/25 border-emerald-500/60 shadow-md shadow-emerald-500/10'
+                                      : 'bg-slate-900/90 border-slate-800 hover:border-slate-700'
+                                  } ${tm.downloaded ? 'cursor-pointer' : ''}`}
+                                >
+                                  <div className="flex items-start justify-between gap-2">
+                                    <span className="text-xs font-bold text-white leading-snug">
+                                      {tm.name}
+                                    </span>
+                                    {isSelected && (
+                                      <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-600 text-white shrink-0">
+                                        ACTIVE
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  <p className="text-[11px] text-slate-400 leading-relaxed">
+                                    {tm.description}
+                                  </p>
+
+                                  <div className="pt-2 border-t border-slate-800/70 flex items-center justify-between gap-2">
+                                    <span className="text-[10px] font-mono text-slate-400 bg-slate-800/90 px-2 py-0.5 rounded-md">
+                                      {Number(tm.size_mb) > 0
+                                        ? `~${tm.size_mb} MB`
+                                        : '0 MB extra'}
+                                    </span>
+
+                                    {tm.downloaded ? (
+                                      <div className="flex items-center gap-2">
+                                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-400 text-[11px] font-semibold border border-emerald-500/30">
+                                          <CheckCircle2 className="w-3 h-3 shrink-0" />
+                                          <span>{t('readyOffline')}</span>
+                                        </span>
+                                        {tm.id !== 'whisper-native' &&
+                                          tm.id !== 'none' && (
+                                            <button
+                                              type="button"
+                                              disabled={isBusy}
+                                              title={t('deleteModelTooltip')}
+                                              onClick={async (e) => {
+                                                e.stopPropagation();
+                                                try {
+                                                  const next =
+                                                    await deleteLocalModel(
+                                                      'translation',
+                                                      tm.id
+                                                    );
+                                                  onModelsStatusUpdated?.(next);
+                                                  if (
+                                                    isSelected &&
+                                                    onSelectTranslationModel
+                                                  ) {
+                                                    onSelectTranslationModel(
+                                                      'none'
+                                                    );
+                                                  }
+                                                } catch (_) {}
+                                              }}
+                                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-rose-600/20 text-slate-400 hover:text-rose-400 border border-slate-700/80 hover:border-rose-500/40 text-[11px] font-semibold disabled:opacity-40 transition"
+                                            >
+                                              <Trash2 className="w-3 h-3 shrink-0" />
+                                              <span>{t('deleteModel')}</span>
+                                            </button>
+                                          )}
+                                      </div>
+                                    ) : (
+                                      <button
+                                        disabled={
+                                          isBusy || downloadingKey === tm.id
+                                        }
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          startDownloadWithPolling(
+                                            tm.id,
+                                            'nllb'
+                                          );
+                                        }}
+                                        className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-[11px] font-semibold shrink-0 transition"
+                                      >
+                                        {downloadingKey === tm.id ? (
+                                          <Loader2 className="w-3 h-3 animate-spin" />
+                                        ) : (
+                                          <Download className="w-3 h-3" />
+                                        )}
+                                        <span>
+                                          {downloadingKey === tm.id
+                                            ? 'Downloading...'
+                                            : `${t('download')} (~${tm.size_mb} MB)`}
+                                        </span>
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                {/* Custom / Local & Legacy Model Folders (shown under Transcribes tab) */}
+                {activeModelSubTab === 'transcribes' && (
+                <div className="rounded-2xl bg-slate-950/60 border border-slate-800 p-4 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <div className="text-xs font-bold text-white flex items-center gap-2">
+                        <FolderOpen className="w-4 h-4 text-blue-400 shrink-0" />
+                        <span>Custom &amp; Legacy Local Model Folders</span>
+                      </div>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        Drop your own compatible ONNX Speech-to-Text folders into{' '}
+                        <code className="text-slate-300 font-mono">
+                          {modelsStatus.models_directory}
+                        </code>{' '}
+                        to use them, or delete old/unused model folders to free up disk space.
+                      </p>
                     </div>
                   </div>
+
+                  {(modelsStatus.local_unmanaged_models || []).length > 0 && (
+                    <div className="space-y-2 pt-1">
+                      {(modelsStatus.local_unmanaged_models || []).map((um) => {
+                        const isUsable =
+                          um.kind === 'custom_stt' && !!um.custom_whisper_id;
+                        const isSelected =
+                          isUsable &&
+                          activeWhisperModel === um.custom_whisper_id;
+                        return (
+                          <div
+                            key={um.folder_name}
+                            className={`p-3 rounded-xl border flex flex-wrap items-center justify-between gap-3 ${
+                              isSelected
+                                ? 'bg-blue-950/25 border-blue-500/60'
+                                : 'bg-slate-900/90 border-slate-800'
+                            }`}
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-xs font-bold text-white font-mono truncate">
+                                  {um.folder_name}
+                                </span>
+                                <span
+                                  className={`px-2 py-0.5 rounded-md text-[10px] font-semibold border ${
+                                    isUsable
+                                      ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                                      : 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                                  }`}
+                                >
+                                  {isUsable
+                                    ? `Custom STT (${um.engine})`
+                                    : 'Old / Unrecognized Folder'}
+                                </span>
+                                <span className="text-[10px] font-mono text-slate-400 bg-slate-800/90 px-2 py-0.5 rounded-md">
+                                  ~{um.size_mb} MB
+                                </span>
+                              </div>
+                              <p className="text-[10px] text-slate-500 font-mono truncate mt-1">
+                                {um.local_path}
+                              </p>
+                            </div>
+
+                            <div className="flex items-center gap-2 shrink-0">
+                              {isUsable && um.custom_whisper_id && (
+                                <button
+                                  type="button"
+                                  disabled={isBusy}
+                                  onClick={() =>
+                                    onSelectWhisperModel?.(
+                                      um.custom_whisper_id!
+                                    )
+                                  }
+                                  className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition ${
+                                    isSelected
+                                      ? 'bg-blue-600 text-white'
+                                      : 'bg-slate-800 hover:bg-blue-600 text-slate-200 hover:text-white border border-slate-700'
+                                  }`}
+                                >
+                                  {isSelected ? 'ACTIVE' : 'Use Model'}
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                disabled={isBusy}
+                                title={t('deleteModelTooltip')}
+                                onClick={async () => {
+                                  try {
+                                    const next = await deleteLocalModel(
+                                      'custom',
+                                      um.folder_name
+                                    );
+                                    onModelsStatusUpdated?.(next);
+                                    if (isSelected && onSelectWhisperModel) {
+                                      const fallback = next.whisper_models.find(
+                                        (w) =>
+                                          w.downloaded &&
+                                          w.id !== um.custom_whisper_id
+                                      );
+                                      if (fallback) {
+                                        onSelectWhisperModel(fallback.id);
+                                      }
+                                    }
+                                  } catch (_) {}
+                                }}
+                                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-rose-500/20 text-slate-300 hover:text-rose-300 border border-slate-700 hover:border-rose-500/40 text-[11px] font-medium transition"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                                <span>{t('deleteModel')}</span>
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
+                )}
               </div>
             )}
 
@@ -1666,6 +2225,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <span>{t('sponsorBtn')}</span>
                   </button>
                 </div>
+
+                {onOpenEulaViewer && (
+                  <div className="flex items-center justify-between gap-3 pt-1">
+                    <span className="text-[11px] text-slate-400">
+                      {t('eulaSubtitle')}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={onOpenEulaViewer}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition shrink-0"
+                    >
+                      <FileText className="w-3.5 h-3.5 text-blue-400" />
+                      <span>{t('eulaTitle')}</span>
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -2025,9 +2600,9 @@ export const SessionDialogModal: React.FC<SessionDialogModalProps> = ({
   modelsStatus,
   languages = [],
   initialWhisperModel = 'small',
-  initialClarificationModel = 'whisper-context',
-  initialTranslationModel = 'opus-mt-da-en',
-  initialTargetLanguage = 'en',
+  initialClarificationModel = 'none',
+  initialTranslationModel = 'none',
+  initialTargetLanguage = 'none',
   initialSpokenLanguages = [],
   hasExistingAudio = false,
   onSave,
@@ -2039,7 +2614,6 @@ export const SessionDialogModal: React.FC<SessionDialogModalProps> = ({
     initialSessionType
   );
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [expectedSpeakers, setExpectedSpeakers] = useState<string>('0');
   const [whisperModel, setWhisperModel] = useState<string>(initialWhisperModel);
   const [clarificationModel, setClarificationModel] = useState<string>(
     initialClarificationModel
@@ -2065,13 +2639,12 @@ export const SessionDialogModal: React.FC<SessionDialogModalProps> = ({
       setTitle(initialTitle);
       setSessionType(initialSessionType || 'file');
       setSelectedFile(null);
-      setExpectedSpeakers('0');
       const initW = initialWhisperModel || 'small';
       setWhisperModel(initW);
       setSessionSttLangFilter(getWhisperLanguageGroup({ id: initW }));
-      setClarificationModel(initialClarificationModel || 'whisper-context');
-      setTranslationModel(initialTranslationModel || 'opus-mt-da-en');
-      setTargetLanguage(initialTargetLanguage || 'en');
+      setClarificationModel(initialClarificationModel || 'none');
+      setTranslationModel(initialTranslationModel || 'none');
+      setTargetLanguage(initialTargetLanguage || 'none');
       setSpokenLanguages(initialSpokenLanguages || []);
       setRetranscribe(false);
     }
@@ -2149,12 +2722,11 @@ export const SessionDialogModal: React.FC<SessionDialogModalProps> = ({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const cleanTitle = title.trim() || 'Untitled Meeting';
-    const spkCount = parseInt(expectedSpeakers, 10);
     onSave({
       title: cleanTitle,
       sessionType,
       file: sessionType === 'file' ? selectedFile : null,
-      expectedSpeakers: spkCount > 0 ? spkCount : undefined,
+      expectedSpeakers: undefined,
       whisperModel,
       clarificationModel,
       translationModel,
@@ -2166,456 +2738,487 @@ export const SessionDialogModal: React.FC<SessionDialogModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 select-none">
+    <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-md flex items-center justify-center p-4 select-none">
       <form
         onSubmit={handleSubmit}
-        className="bg-slate-900 border border-slate-700/80 rounded-2xl max-w-lg w-full shadow-2xl overflow-hidden"
+        className="relative bg-slate-900 border border-slate-700/80 rounded-3xl max-w-4xl w-full shadow-2xl overflow-hidden"
       >
+        {/* Subtle Intro-inspired Ambient Top Glow */}
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute -top-24 left-1/2 -translate-x-1/2 w-[480px] h-40 rounded-full bg-gradient-to-r from-blue-600/20 via-indigo-500/20 to-emerald-500/15 blur-3xl"
+        />
+
         {/* Header */}
-        <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between">
-          <div>
-            <h3 className="text-base font-bold text-white">
-              {isEdit ? t('editRecordingSession') : t('newRecordingSession')}
-            </h3>
-            <p className="text-xs text-slate-400">
-              {isEdit ? t('editSessionSub') : t('newSessionSub')}
-            </p>
+        <div className="relative px-6 py-5 border-b border-slate-800/80 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3.5 min-w-0">
+            <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-blue-600/25 via-indigo-600/20 to-emerald-500/15 border border-blue-500/30 flex items-center justify-center shrink-0 shadow-inner">
+              {sessionType === 'live' ? (
+                <Radio className="w-5 h-5 text-emerald-400" />
+              ) : (
+                <FileAudio className="w-5 h-5 text-blue-400" />
+              )}
+            </div>
+            <div className="min-w-0">
+              <h3 className="text-base font-bold text-white tracking-tight truncate">
+                {isEdit ? t('editRecordingSession') : t('newRecordingSession')}
+              </h3>
+              <p className="text-xs text-slate-400 truncate mt-0.5">
+                {isEdit ? t('editSessionSub') : t('newSessionSub')}
+              </p>
+            </div>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+            className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800/80 transition shrink-0"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        {/* Body */}
-        <div className="p-6 space-y-4 max-h-[75vh] overflow-y-auto">
-          {/* 1. Session Type Selector (Locked when editing an existing session) */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-semibold text-slate-300">
-                {t('sessionType')}
-              </label>
-              {isEdit && (
-                <span className="text-[10px] text-slate-500">
-                  {t('lockedAfterCreation')}
-                </span>
+        {/* Body — Clean 2-Column Desktop Layout */}
+        <div className="relative p-6 max-h-[76vh] overflow-y-auto">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
+            {/* LEFT COLUMN: Source, Session Name & Audio File */}
+            <div className="flex flex-col gap-4">
+              {/* 1. Session Type Selector */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                    {t('sessionType')}
+                  </label>
+                  {isEdit && (
+                    <span className="text-[10px] text-slate-500">
+                      {t('lockedAfterCreation')}
+                    </span>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-2.5">
+                  <button
+                    type="button"
+                    disabled={isEdit}
+                    onClick={() => setSessionType('file')}
+                    className={`p-3.5 rounded-2xl border text-left transition flex items-start gap-2.5 ${
+                      sessionType === 'file'
+                        ? 'bg-blue-600/15 border-blue-500 text-white shadow-md shadow-blue-600/10'
+                        : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:border-slate-700'
+                    } ${isEdit ? 'opacity-75 cursor-not-allowed' : 'cursor-pointer'}`}
+                  >
+                    <FileAudio
+                      className={`w-4 h-4 shrink-0 mt-0.5 ${
+                        sessionType === 'file'
+                          ? 'text-blue-400'
+                          : 'text-slate-500'
+                      }`}
+                    />
+                    <div className="min-w-0">
+                      <div className="text-xs font-bold">{t('mp3AudioFile')}</div>
+                      <div className="text-[10px] text-slate-400 mt-0.5 leading-snug">
+                        {t('mp3AudioFileDesc')}
+                      </div>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={isEdit}
+                    onClick={() => setSessionType('live')}
+                    className={`p-3.5 rounded-2xl border text-left transition flex items-start gap-2.5 ${
+                      sessionType === 'live'
+                        ? 'bg-emerald-600/15 border-emerald-500 text-white shadow-md shadow-emerald-600/10'
+                        : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:border-slate-700'
+                    } ${isEdit ? 'opacity-75 cursor-not-allowed' : 'cursor-pointer'}`}
+                  >
+                    <Radio
+                      className={`w-4 h-4 shrink-0 mt-0.5 ${
+                        sessionType === 'live'
+                          ? 'text-emerald-400'
+                          : 'text-slate-500'
+                      }`}
+                    />
+                    <div className="min-w-0">
+                      <div className="text-xs font-bold">{t('liveMeeting')}</div>
+                      <div className="text-[10px] text-slate-400 mt-0.5 leading-snug">
+                        {t('liveMeetingDesc')}
+                      </div>
+                    </div>
+                  </button>
+                </div>
+              </div>
+
+              {/* 2. Session Name */}
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                  {t('sessionName')}
+                </label>
+                <input
+                  type="text"
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  placeholder="e.g. Q4 Sales Call with Nordic Client"
+                  autoFocus
+                  className="w-full bg-slate-950/80 border border-slate-700/80 focus:border-blue-500 rounded-xl px-3.5 py-2.5 text-xs font-medium text-white focus:outline-none transition"
+                />
+              </div>
+
+              {/* 3. If File Session: File Picker + Expected Speakers */}
+              {sessionType === 'file' && (
+                <div className="flex flex-col gap-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                      {isEdit
+                        ? t('audioFileLabelEdit')
+                        : t('audioFileLabelCreate')}
+                    </label>
+                    {isEdit && currentSourceFileName && !selectedFile && (
+                      <span className="text-[11px] text-indigo-300 font-medium truncate max-w-[200px]">
+                        {t('currentFile')} {currentSourceFileName}
+                      </span>
+                    )}
+                  </div>
+
+                  <label
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      setIsDragging(true);
+                    }}
+                    onDragLeave={() => setIsDragging(false)}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      setIsDragging(false);
+                      const f = e.dataTransfer.files?.[0];
+                      if (f) {
+                        setSelectedFile(f);
+                        if (
+                          !isEdit &&
+                          (title.startsWith('Sales Meeting') || !title.trim())
+                        ) {
+                          setTitle(f.name.replace(/\.[^/.]+$/, ''));
+                        }
+                      }
+                    }}
+                    className={`w-full rounded-2xl border-2 border-dashed p-5 cursor-pointer transition flex flex-col items-center text-center ${
+                      isDragging
+                        ? 'border-blue-400 bg-blue-500/15'
+                        : selectedFile
+                        ? 'border-emerald-500/60 bg-emerald-950/20'
+                        : 'border-slate-700/80 hover:border-blue-500/60 bg-slate-950/50'
+                    }`}
+                  >
+                    <input
+                      type="file"
+                      accept=".mp3,.m4a,.wav,.flac,.ogg,.aac,.webm,.mp4,audio/mpeg,audio/mp3,audio/mp4,audio/x-m4a,audio/aac,audio/wav,audio/*"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) {
+                          setSelectedFile(f);
+                          if (
+                            !isEdit &&
+                            (title.startsWith('Sales Meeting') || !title.trim())
+                          ) {
+                            setTitle(f.name.replace(/\.[^/.]+$/, ''));
+                          }
+                        }
+                      }}
+                      className="hidden"
+                    />
+                    <div
+                      className={`w-10 h-10 rounded-xl flex items-center justify-center mb-2.5 ${
+                        selectedFile
+                          ? 'bg-emerald-500/15 text-emerald-400'
+                          : 'bg-blue-500/15 text-blue-400'
+                      }`}
+                    >
+                      <Upload className="w-5 h-5" />
+                    </div>
+                    {selectedFile ? (
+                      <div>
+                        <div className="text-xs font-bold text-emerald-300 break-all">
+                          {selectedFile.name}
+                        </div>
+                        <div className="text-[11px] text-slate-400 mt-0.5">
+                          {(selectedFile.size / (1024 * 1024)).toFixed(2)} MB
+                        </div>
+                      </div>
+                    ) : (
+                      <div>
+                        <div className="text-xs font-semibold text-slate-200">
+                          {t('browseOrDropAudio')}
+                        </div>
+                        <div className="text-[11px] text-slate-500 mt-0.5">
+                          {isEdit
+                            ? t('leaveEmptyKeepAudio')
+                            : t('supportsFormats')}
+                        </div>
+                      </div>
+                    )}
+                  </label>
+                </div>
+              )}
+
+              {/* 4. Spoken Languages */}
+              {selectableSpokenLanguages.length > 0 && (
+                <div className="rounded-2xl bg-slate-950/60 border border-slate-800 p-3.5 space-y-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-[11px] font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+                      <Languages className="w-3.5 h-3.5 text-amber-400" />
+                      <span>{t('meetingSpokenLanguagesLabel')}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSpokenLanguages([]);
+                        if (isEdit && hasExistingAudio) setRetranscribe(true);
+                      }}
+                      className={`px-2 py-0.5 rounded-md text-[10px] font-semibold border transition ${
+                        spokenLanguages.length === 0
+                          ? 'bg-blue-600 border-blue-500 text-white'
+                          : 'bg-slate-900 border-slate-700 text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      {t('autoAllLanguages')}
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {selectableSpokenLanguages.slice(0, 10).map((lang) => {
+                      const isActive = spokenLanguages.includes(lang.code);
+                      return (
+                        <button
+                          key={lang.code}
+                          type="button"
+                          onClick={() => toggleSpokenLanguage(lang.code)}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition flex items-center gap-1 ${
+                            isActive
+                              ? 'bg-blue-600 border-blue-500 text-white shadow-sm'
+                              : 'bg-slate-900 border-slate-700/80 text-slate-300 hover:border-slate-600 hover:text-white'
+                          }`}
+                        >
+                          {isActive && <Check className="w-3 h-3 text-white" />}
+                          <span>
+                            {lang.name.split(' ')[0]} ({lang.code.toUpperCase()})
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
               )}
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                type="button"
-                disabled={isEdit}
-                onClick={() => setSessionType('file')}
-                className={`p-3.5 rounded-xl border text-left transition flex items-start gap-3 ${
-                  sessionType === 'file'
-                    ? 'bg-indigo-600/20 border-indigo-500 text-white shadow-md shadow-indigo-600/10'
-                    : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:border-slate-700'
-                } ${isEdit ? 'opacity-75 cursor-not-allowed' : 'cursor-pointer'}`}
-              >
-                <FileAudio
-                  className={`w-5 h-5 shrink-0 mt-0.5 ${
-                    sessionType === 'file'
-                      ? 'text-indigo-400'
-                      : 'text-slate-500'
-                  }`}
-                />
-                <div>
-                  <div className="text-xs font-bold">{t('mp3AudioFile')}</div>
-                  <div className="text-[10px] text-slate-400 mt-0.5 leading-snug">
-                    {t('mp3AudioFileDesc')}
-                  </div>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                disabled={isEdit}
-                onClick={() => setSessionType('live')}
-                className={`p-3.5 rounded-xl border text-left transition flex items-start gap-3 ${
-                  sessionType === 'live'
-                    ? 'bg-emerald-600/20 border-emerald-500 text-white shadow-md shadow-emerald-600/10'
-                    : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:border-slate-700'
-                } ${isEdit ? 'opacity-75 cursor-not-allowed' : 'cursor-pointer'}`}
-              >
-                <Radio
-                  className={`w-5 h-5 shrink-0 mt-0.5 ${
-                    sessionType === 'live'
-                      ? 'text-emerald-400'
-                      : 'text-slate-500'
-                  }`}
-                />
-                <div>
-                  <div className="text-xs font-bold">{t('liveMeeting')}</div>
-                  <div className="text-[10px] text-slate-400 mt-0.5 leading-snug">
-                    {t('liveMeetingDesc')}
-                  </div>
-                </div>
-              </button>
-            </div>
-          </div>
-
-          {/* 2. Session Name */}
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold text-slate-300">
-              {t('sessionName')}
-            </label>
-            <input
-              type="text"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="e.g. Q4 Sales Call with Nordic Client"
-              autoFocus
-              className="w-full bg-slate-950 border border-slate-700 focus:border-blue-500 rounded-xl px-3.5 py-2.5 text-xs font-medium text-white focus:outline-none"
-            />
-          </div>
-
-          {/* 3. If File Session: File Picker + Expected Speakers */}
-          {sessionType === 'file' && (
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-semibold text-slate-300">
-                  {isEdit ? t('audioFileLabelEdit') : t('audioFileLabelCreate')}
-                </label>
-                {isEdit && currentSourceFileName && !selectedFile && (
-                  <span className="text-[11px] text-indigo-300 font-medium truncate max-w-[200px]">
-                    {t('currentFile')} {currentSourceFileName}
-                  </span>
-                )}
-              </div>
-
-              <label
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  setIsDragging(true);
-                }}
-                onDragLeave={() => setIsDragging(false)}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  setIsDragging(false);
-                  const f = e.dataTransfer.files?.[0];
-                  if (f) {
-                    setSelectedFile(f);
-                    if (
-                      !isEdit &&
-                      (title.startsWith('Sales Meeting') || !title.trim())
-                    ) {
-                      setTitle(f.name.replace(/\.[^/.]+$/, ''));
-                    }
-                  }
-                }}
-                className={`w-full rounded-xl border-2 border-dashed p-5 cursor-pointer transition flex flex-col items-center text-center ${
-                  isDragging
-                    ? 'border-indigo-400 bg-indigo-500/15'
-                    : selectedFile
-                    ? 'border-emerald-500/60 bg-emerald-950/20'
-                    : 'border-slate-700 hover:border-indigo-500/60 bg-slate-950/50'
-                }`}
-              >
-                <input
-                  type="file"
-                  accept=".mp3,.m4a,.wav,.flac,.ogg,.aac,.webm,.mp4,audio/mpeg,audio/mp3,audio/mp4,audio/x-m4a,audio/aac,audio/wav,audio/*"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) {
-                      setSelectedFile(f);
-                      if (
-                        !isEdit &&
-                        (title.startsWith('Sales Meeting') || !title.trim())
-                      ) {
-                        setTitle(f.name.replace(/\.[^/.]+$/, ''));
-                      }
-                    }
-                  }}
-                  className="hidden"
-                />
-                <Upload
-                  className={`w-6 h-6 mb-2 ${
-                    selectedFile ? 'text-emerald-400' : 'text-indigo-400'
-                  }`}
-                />
-                {selectedFile ? (
-                  <div>
-                    <div className="text-xs font-bold text-emerald-300">
-                      {selectedFile.name}
-                    </div>
-                    <div className="text-[11px] text-slate-400 mt-0.5">
-                      {(selectedFile.size / (1024 * 1024)).toFixed(2)} MB
-                    </div>
-                  </div>
-                ) : (
-                  <div>
-                    <div className="text-xs font-semibold text-slate-200">
-                      {t('browseOrDropAudio')}
-                    </div>
-                    <div className="text-[11px] text-slate-500 mt-0.5">
-                      {isEdit
-                        ? t('leaveEmptyKeepAudio')
-                        : t('supportsFormats')}
-                    </div>
-                  </div>
-                )}
-              </label>
-
-              <div className="flex items-center justify-between bg-slate-950/60 border border-slate-800 rounded-xl px-3.5 py-2.5">
-                <span className="text-xs text-slate-400 font-medium">
-                  {t('expectedSpeakers')}
-                </span>
-                <select
-                  value={expectedSpeakers}
-                  onChange={(e) => setExpectedSpeakers(e.target.value)}
-                  className="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white font-semibold focus:outline-none"
-                >
-                  <option value="0">{t('autoDetectSpeakers')}</option>
-                  <option value="2">2 {t('speakersCount')}</option>
-                  <option value="3">3 {t('speakersCount')}</option>
-                  <option value="4">4 {t('speakersCount')}</option>
-                  <option value="5">5 {t('speakersCount')}</option>
-                </select>
-              </div>
-            </div>
-          )}
-
-          {/* 4. Meeting / Interview Spoken Languages (e.g. Danish + English) */}
-          {selectableSpokenLanguages.length > 0 && (
-            <div className="rounded-xl bg-slate-950/60 border border-slate-800 p-3.5 space-y-2.5">
-              <div className="flex items-center justify-between gap-2">
+            {/* RIGHT COLUMN: Stacked Flex-Column Local AI Model Pipeline */}
+            <div className="rounded-2xl bg-slate-950/60 border border-slate-800 p-4 flex flex-col gap-3.5">
+              <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-800/80">
                 <div className="text-[11px] font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
-                  <Languages className="w-3.5 h-3.5 text-amber-400" />
-                  <span>{t('meetingSpokenLanguagesLabel')}</span>
+                  <Cpu className="w-3.5 h-3.5 text-blue-400" />
+                  <span>{t('sessionModelsHeader')}</span>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSpokenLanguages([]);
-                    if (isEdit && hasExistingAudio) setRetranscribe(true);
-                  }}
-                  className={`px-2 py-0.5 rounded-md text-[10px] font-semibold border transition ${
-                    spokenLanguages.length === 0
-                      ? 'bg-blue-600 border-blue-500 text-white'
-                      : 'bg-slate-900 border-slate-700 text-slate-400 hover:text-white'
-                  }`}
-                >
-                  {t('autoAllLanguages')}
-                </button>
               </div>
-              <p className="text-[11px] text-slate-400 leading-snug">
-                {t('meetingSpokenLanguagesDesc')}
-              </p>
-              <div className="flex flex-wrap gap-1.5 pt-0.5">
-                {selectableSpokenLanguages.slice(0, 10).map((lang) => {
-                  const isActive = spokenLanguages.includes(lang.code);
-                  return (
-                    <button
-                      key={lang.code}
-                      type="button"
-                      onClick={() => toggleSpokenLanguage(lang.code)}
-                      className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition flex items-center gap-1 ${
-                        isActive
-                          ? 'bg-blue-600 border-blue-500 text-white shadow-sm'
-                          : 'bg-slate-900 border-slate-700/80 text-slate-300 hover:border-slate-600 hover:text-white'
-                      }`}
-                    >
-                      {isActive && <Check className="w-3 h-3 text-white" />}
-                      <span>
-                        {lang.name.split(' ')[0]} ({lang.code.toUpperCase()})
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
 
-          {/* 5. AI Models & Output Language Selection for this Session */}
-          <div className="rounded-xl bg-slate-950/60 border border-slate-800 p-3.5 space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2 pb-1 border-b border-slate-800/80">
-              <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-                <Cpu className="w-3.5 h-3.5 text-blue-400" />
-                <span>{t('sessionModelsHeader')}</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="text-[10px] font-semibold text-slate-400">
-                  STT Category:
-                </span>
-                <select
-                  value={sessionSttLangFilter}
-                  onChange={(e) => {
-                    const nextFilter = e.target.value as SttLanguageFilter;
-                    setSessionSttLangFilter(nextFilter);
-                    const nextList = allWhisperOptions.filter(
-                      (wm) =>
-                        nextFilter === 'all' ||
-                        getWhisperLanguageGroup(wm) === nextFilter
-                    );
-                    if (
-                      nextList.length > 0 &&
-                      !nextList.some((w) => w.id === whisperModel)
-                    ) {
-                      setWhisperModel(nextList[0].id);
+              {/* Stacked Model Selectors (Full-Width Flex Column) */}
+              <div className="flex flex-col gap-3">
+                {/* STT Category */}
+                <div className="flex flex-col gap-1">
+                  <label className="text-[11px] font-semibold text-slate-400">
+                    STT Language Category
+                  </label>
+                  <select
+                    value={sessionSttLangFilter}
+                    onChange={(e) => {
+                      const nextFilter = e.target.value as SttLanguageFilter;
+                      setSessionSttLangFilter(nextFilter);
+                      const nextList = allWhisperOptions.filter(
+                        (wm) =>
+                          nextFilter === 'all' ||
+                          getWhisperLanguageGroup(wm) === nextFilter
+                      );
+                      if (
+                        nextList.length > 0 &&
+                        !nextList.some((w) => w.id === whisperModel)
+                      ) {
+                        setWhisperModel(nextList[0].id);
+                        if (isEdit && hasExistingAudio) {
+                          setRetranscribe(true);
+                        }
+                      }
+                    }}
+                    className="w-full bg-slate-900 border border-slate-700/80 hover:border-blue-500/60 rounded-xl px-3 py-2 text-xs font-semibold text-blue-300 focus:outline-none focus:border-blue-500 cursor-pointer transition"
+                  >
+                    {STT_LANGUAGE_GROUP_OPTIONS.filter(
+                      (opt) =>
+                        opt.value === 'multilingual' ||
+                        allWhisperOptions.some(
+                          (w) => getWhisperLanguageGroup(w) === opt.value
+                        )
+                    ).map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                    {allWhisperOptions.some(
+                      (w) => getWhisperLanguageGroup(w) === 'custom'
+                    ) && (
+                      <option value="custom">Custom / Local ONNX Models</option>
+                    )}
+                    <option value="all">All Downloaded Models</option>
+                  </select>
+                </div>
+
+                {/* 1. Speech-to-Text Model */}
+                <div className="flex flex-col gap-1">
+                  <label className="text-[11px] font-semibold text-blue-300 flex items-center gap-1.5">
+                    <Cpu className="w-3 h-3 text-blue-400" />
+                    <span>1. {t('speechToTextModel')}</span>
+                  </label>
+                  <select
+                    value={whisperModel}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setWhisperModel(val);
                       if (isEdit && hasExistingAudio) {
                         setRetranscribe(true);
                       }
-                    }
-                  }}
-                  className="bg-slate-900 border border-slate-700 hover:border-blue-500/60 rounded-lg px-2 py-1 text-[11px] font-semibold text-blue-300 focus:outline-none focus:border-blue-500 cursor-pointer"
-                >
-                  <option value="multilingual">
-                    Multi-Language (Standard Whisper)
-                  </option>
-                  <option value="da">
-                    Dansk (DA) — Hviske & Røst
-                  </option>
-                  <option value="all">All Downloaded Models</option>
-                </select>
+                    }}
+                    className="w-full bg-slate-900 border border-blue-500/35 rounded-xl px-3 py-2 text-xs text-white font-semibold focus:outline-none focus:border-blue-500 transition"
+                  >
+                    {whisperOptions.map((wm) => (
+                      <option key={wm.id} value={wm.id}>
+                        {wm.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* 2. Context Word Clarifier */}
+                <div className="flex flex-col gap-1">
+                  <label className="text-[11px] font-semibold text-amber-300 flex items-center gap-1.5">
+                    <Sparkles className="w-3 h-3 text-amber-400" />
+                    <span>2. {t('contextClarifierModel')}</span>
+                  </label>
+                  <select
+                    value={clarificationModel}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setClarificationModel(val);
+                      if (isEdit && hasExistingAudio) {
+                        setRetranscribe(true);
+                      }
+                    }}
+                    className="w-full bg-slate-900 border border-amber-500/35 rounded-xl px-3 py-2 text-xs text-white font-semibold focus:outline-none focus:border-amber-500 transition"
+                  >
+                    {clarifierOptions.map((cm) => (
+                      <option key={cm.id} value={cm.id}>
+                        {cm.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* 3. Local Translation Model */}
+                <div className="flex flex-col gap-1">
+                  <label className="text-[11px] font-semibold text-emerald-300 flex items-center gap-1.5">
+                    <Languages className="w-3 h-3 text-emerald-400" />
+                    <span>3. {t('localTranslationModel')}</span>
+                  </label>
+                  <select
+                    value={translationModel}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setTranslationModel(val);
+                      if (val === 'none') {
+                        setTargetLanguage('none');
+                      } else if (targetLanguage === 'none') {
+                        setTargetLanguage('en');
+                      }
+                      if (isEdit && hasExistingAudio) {
+                        setRetranscribe(true);
+                      }
+                    }}
+                    className="w-full bg-slate-900 border border-emerald-500/35 rounded-xl px-3 py-2 text-xs text-white font-semibold focus:outline-none focus:border-emerald-500 transition"
+                  >
+                    {translatorOptions.map((tm) => (
+                      <option key={tm.id} value={tm.id}>
+                        {tm.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Output Language (only shown when translation is enabled) */}
+                {outputLanguages.length > 0 && translationModel !== 'none' && (
+                  <div className="flex flex-col gap-1 pt-1 border-t border-slate-800/80">
+                    <label className="text-[11px] font-semibold text-indigo-300 flex items-center gap-1.5">
+                      <Globe className="w-3 h-3 text-indigo-400" />
+                      <span>{t('outputLanguage')}</span>
+                    </label>
+                    <select
+                      value={targetLanguage}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setTargetLanguage(val);
+                        if (val === 'none') {
+                          setTranslationModel('none');
+                        }
+                        if (isEdit && hasExistingAudio) {
+                          setRetranscribe(true);
+                        }
+                      }}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-semibold focus:outline-none focus:border-indigo-500 transition"
+                    >
+                      {outputLanguages.map((lang) => (
+                        <option key={lang.code} value={lang.code}>
+                          {lang.name}{' '}
+                          {lang.code !== 'none'
+                            ? `(${lang.code.toUpperCase()})`
+                            : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {/* Re-transcribe checkbox when editing a session with existing audio */}
+                {isEdit && hasExistingAudio && !selectedFile && (
+                  <label className="flex items-center gap-2.5 pt-2.5 border-t border-slate-800/80 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={retranscribe}
+                      onChange={(e) => setRetranscribe(e.target.checked)}
+                      className="w-4 h-4 rounded border-slate-600 text-blue-600 focus:ring-blue-500"
+                    />
+                    <span className="text-xs font-semibold text-blue-300 flex items-center gap-1.5">
+                      <RefreshCw className="w-3.5 h-3.5 text-blue-400" />
+                      <span>{t('retranscribeOnSave')}</span>
+                    </span>
+                  </label>
+                )}
               </div>
             </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-              <div className="space-y-1">
-                <label className="text-[11px] font-medium text-slate-400">
-                  1. {t('speechToTextModel')}
-                </label>
-                <select
-                  value={whisperModel}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setWhisperModel(val);
-                    if (isEdit && hasExistingAudio) {
-                      setRetranscribe(true);
-                    }
-                  }}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-semibold focus:outline-none focus:border-blue-500"
-                >
-                  {whisperOptions.map((wm) => (
-                    <option key={wm.id} value={wm.id}>
-                      {wm.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-[11px] font-medium text-amber-300/90 flex items-center gap-1">
-                  <Sparkles className="w-3 h-3 text-amber-400" />
-                  <span>2. {t('contextClarifierModel')}</span>
-                </label>
-                <select
-                  value={clarificationModel}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setClarificationModel(val);
-                    if (isEdit && hasExistingAudio) {
-                      setRetranscribe(true);
-                    }
-                  }}
-                  className="w-full bg-slate-900 border border-amber-500/40 rounded-lg px-2.5 py-1.5 text-xs text-white font-semibold focus:outline-none focus:border-amber-500"
-                >
-                  {clarifierOptions.map((cm) => (
-                    <option key={cm.id} value={cm.id}>
-                      {cm.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-[11px] font-medium text-slate-400">
-                3. {t('localTranslationModel')}
-              </label>
-              <select
-                value={translationModel}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setTranslationModel(val);
-                  if (val === 'none') {
-                    setTargetLanguage('none');
-                  } else if (targetLanguage === 'none') {
-                    setTargetLanguage('en');
-                  }
-                  if (isEdit && hasExistingAudio) {
-                    setRetranscribe(true);
-                  }
-                }}
-                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-semibold focus:outline-none focus:border-emerald-500"
-              >
-                {translatorOptions.map((tm) => (
-                  <option key={tm.id} value={tm.id}>
-                    {tm.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {outputLanguages.length > 0 && translationModel !== 'none' && (
-              <div className="flex items-center justify-between pt-1 border-t border-slate-800/80">
-                <span className="text-[11px] text-slate-400 font-medium flex items-center gap-1.5">
-                  <Globe className="w-3.5 h-3.5 text-indigo-400" />
-                  <span>{t('outputLanguage')}:</span>
-                </span>
-                <select
-                  value={targetLanguage}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setTargetLanguage(val);
-                    if (val === 'none') {
-                      setTranslationModel('none');
-                    }
-                    if (isEdit && hasExistingAudio) {
-                      setRetranscribe(true);
-                    }
-                  }}
-                  className="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white font-semibold focus:outline-none focus:border-indigo-500"
-                >
-                  {outputLanguages.map((lang) => (
-                    <option key={lang.code} value={lang.code}>
-                      {lang.name}{' '}
-                      {lang.code !== 'none'
-                        ? `(${lang.code.toUpperCase()})`
-                        : ''}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            {/* Re-transcribe & Translate checkbox when editing a session with existing audio */}
-            {isEdit && hasExistingAudio && !selectedFile && (
-              <label className="flex items-center gap-2.5 pt-2 border-t border-slate-800/80 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={retranscribe}
-                  onChange={(e) => setRetranscribe(e.target.checked)}
-                  className="w-4 h-4 rounded border-slate-600 text-blue-600 focus:ring-blue-500"
-                />
-                <span className="text-xs font-semibold text-blue-300 flex items-center gap-1.5">
-                  <RefreshCw className="w-3.5 h-3.5 text-blue-400" />
-                  <span>{t('retranscribeOnSave')}</span>
-                </span>
-              </label>
-            )}
           </div>
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 bg-slate-950/60 border-t border-slate-800 flex items-center justify-end gap-2.5">
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-4 py-2 rounded-xl text-xs font-medium text-slate-400 hover:text-white hover:bg-slate-800 transition"
-          >
-            {t('cancel')}
-          </button>
-          <button
-            type="submit"
-            className="px-4 py-2 rounded-xl text-xs font-semibold bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-600/25 transition"
-          >
-            {isEdit ? t('saveChanges') : t('createSession')}
-          </button>
+        <div className="relative px-6 py-4 bg-slate-950/60 border-t border-slate-800/80 flex items-center justify-between gap-3">
+          <div className="inline-flex items-center gap-1.5 text-[11px] text-slate-400">
+            <Shield className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+            <span>100% Local &amp; Offline Processing</span>
+          </div>
+          <div className="flex items-center gap-2.5">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 rounded-xl text-xs font-medium text-slate-400 hover:text-white hover:bg-slate-800 transition"
+            >
+              {t('cancel')}
+            </button>
+            <button
+              type="submit"
+              className="px-5 py-2 rounded-xl text-xs font-semibold bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-600/25 transition"
+            >
+              {isEdit ? t('saveChanges') : t('createSession')}
+            </button>
+          </div>
         </div>
       </form>
     </div>
@@ -2653,9 +3256,9 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
   const [onboardingSttFilter, setOnboardingSttFilter] =
     useState<SttLanguageFilter>('multilingual');
   const [selectedClarifier, setSelectedClarifier] =
-    useState<string>('whisper-context');
+    useState<string>('none');
   const [selectedTranslator, setSelectedTranslator] =
-    useState<string>('opus-mt-da-en');
+    useState<string>('none');
 
   useEffect(() => {
     if (isOpen && modelsStatus) {

@@ -168,11 +168,55 @@ def api_set_storage_path(req: StoragePathRequest):
         raise HTTPException(status_code=400, detail=f"Invalid storage path: {exc}")
 
 
+class GpuSettingRequest(BaseModel):
+    enabled: bool
+
+
+@app.post("/api/settings/gpu")
+def api_set_gpu_acceleration(req: GpuSettingRequest):
+    """Enable or disable ONNX Runtime GPU acceleration (with automatic safe CPU fallback)."""
+    config.set_gpu_acceleration_enabled(req.enabled)
+    pipeline.evict_model_cache("all")
+    status = get_models_status()
+    broadcast_event(
+        "model_progress",
+        {
+            "status": f"GPU acceleration {'enabled' if req.enabled else 'disabled'} (safe CPU fallback active).",
+            "busy": False,
+            "models_status": status,
+        },
+    )
+    return status
+
+
+class DiarizationSettingRequest(BaseModel):
+    model_id: str
+
+
+@app.post("/api/settings/diarization")
+def api_set_diarization_model(req: DiarizationSettingRequest):
+    """Switch the active local SpeechSplitter / Voice Diarization model."""
+    config.set_active_diarization_model(req.model_id)
+    pipeline.evict_model_cache("speaker")
+    status = get_models_status()
+    broadcast_event(
+        "model_progress",
+        {
+            "status": f"Active SpeechSplitter updated to '{req.model_id}'.",
+            "busy": False,
+            "models_status": status,
+        },
+    )
+    return status
+
+
 class DownloadModelRequest(BaseModel):
-    model_type: str  # "whisper", "speaker", "clarification", "opus", "nllb", "all_recommended", or "onboarding"
+    model_type: str  # "whisper", "speaker", "clarification", "opus", "opus_pair", "nllb", "all_recommended", or "onboarding"
     whisper_id: Optional[str] = DEFAULT_WHISPER_MODEL
     clarification_id: Optional[str] = DEFAULT_CLARIFICATION_MODEL
     translation_id: Optional[str] = DEFAULT_TRANSLATION_MODEL
+    speaker_id: Optional[str] = None
+    opus_pairs: Optional[List[str]] = None
 
 
 @app.post("/api/models/download")
@@ -184,8 +228,11 @@ def api_download_model(req: DownloadModelRequest):
         )
         try:
             if req.model_type in ("speaker", "all_recommended", "onboarding"):
-                broadcast_event("model_progress", {"status": "Downloading Step 1/4: 3D-Speaker Diarization ONNX Model (~26 MB)...", "busy": True})
-                ensure_speaker_model()
+                s_id = req.speaker_id or config.get_active_diarization_model()
+                if s_id == "none":
+                    s_id = config.DEFAULT_DIARIZATION_MODEL
+                broadcast_event("model_progress", {"status": f"Downloading Step 1/4: SpeechSplitter '{s_id}' ONNX Model...", "busy": True})
+                ensure_speaker_model(s_id)
             if req.model_type in ("whisper", "all_recommended", "onboarding"):
                 w_id = req.whisper_id or DEFAULT_WHISPER_MODEL
                 broadcast_event("model_progress", {"status": f"Downloading Step 2/4: Speech-to-Text Model '{w_id}'...", "busy": True})
@@ -198,12 +245,19 @@ def api_download_model(req: DownloadModelRequest):
                 c_id = req.clarification_id or DEFAULT_CLARIFICATION_MODEL
                 broadcast_event("model_progress", {"status": f"Downloading Step 3/4: Context Clarifier '{c_id}' ONNX Model...", "busy": True})
                 ensure_clarification_model(c_id)
-            if req.model_type in ("opus", "all_recommended") or (
+            if req.model_type == "opus_pair" and req.opus_pairs:
+                for pkey in req.opus_pairs:
+                    if pkey in config.OPUS_PAIR_REPOS:
+                        broadcast_event("model_progress", {"status": f"Downloading Step 4/4: OPUS-MT Language Pair '{pkey.upper()}' (~85 MB)...", "busy": True})
+                        ensure_opus_pair_model(pkey)
+            elif req.model_type in ("opus", "all_recommended") or (
                 req.model_type == "onboarding" and req.translation_id == "opus-mt-da-en"
             ):
-                broadcast_event("model_progress", {"status": "Downloading Step 4/4: Specialized OPUS-MT Danish <-> English ONNX Models (~85 MB)...", "busy": True})
-                ensure_opus_pair_model("da-en")
-                ensure_opus_pair_model("en-da")
+                pairs_to_dl = req.opus_pairs if req.opus_pairs else ["da-en", "en-da"]
+                for pkey in pairs_to_dl:
+                    if pkey in config.OPUS_PAIR_REPOS:
+                        broadcast_event("model_progress", {"status": f"Downloading Step 4/4: OPUS-MT '{pkey.upper()}' ONNX Model (~85 MB)...", "busy": True})
+                        ensure_opus_pair_model(pkey)
             if req.model_type == "nllb" or (
                 req.model_type == "onboarding" and req.translation_id == "nllb-200-600M"
             ):
@@ -256,7 +310,7 @@ def api_list_devices():
 class CreateSessionRequest(BaseModel):
     title: str = "New Meeting"
     session_type: str = "file"
-    target_language: str = "en"
+    target_language: str = "none"
     whisper_model: str = DEFAULT_WHISPER_MODEL
     clarification_model: str = DEFAULT_CLARIFICATION_MODEL
     translation_model: str = DEFAULT_TRANSLATION_MODEL

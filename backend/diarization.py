@@ -8,7 +8,11 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import onnxruntime as ort
 
-from models_manager import is_speaker_model_downloaded
+from models_manager import (
+    get_diarization_model_path,
+    is_diarization_model_downloaded,
+    is_speaker_model_downloaded,
+)
 import config as app_config
 
 SAMPLE_RATE = 16000
@@ -65,11 +69,12 @@ def _extract_kaldi_fbank_80(audio_16k: np.ndarray) -> np.ndarray:
 def _agglomerative_average_cosine_numpy(
     embs: np.ndarray,
     num_speakers: Optional[int] = None,
-    distance_threshold: float = 0.64,
+    distance_threshold: float = 0.56,
 ) -> np.ndarray:
     """
-    Pure-NumPy average-linkage hierarchical cosine clustering.
-    Eliminates `scipy.cluster.hierarchy` dependency completely.
+    Pure-NumPy average-linkage hierarchical cosine clustering (UPGMA).
+    Uses O(N^2) incremental distance updates so 500+ segments from 2-hour recordings
+    cluster in milliseconds without requiring `scipy.cluster.hierarchy`.
     """
     n = len(embs)
     if n <= 1:
@@ -79,34 +84,47 @@ def _agglomerative_average_cosine_numpy(
     norms = np.linalg.norm(embs, axis=1, keepdims=True)
     normed = embs / np.maximum(norms, 1e-8)
     sim_mat = np.clip(normed @ normed.T, -1.0, 1.0)
-    dist_mat = 1.0 - sim_mat
+    dist_mat = (1.0 - sim_mat).astype(np.float64)
+    np.fill_diagonal(dist_mat, np.inf)
 
-    clusters: List[List[int]] = [[i] for i in range(n)]
+    clusters: Dict[int, List[int]] = {i: [i] for i in range(n)}
+    sizes = np.ones(n, dtype=np.float64)
+    active = np.ones(n, dtype=bool)
     target_k = min(num_speakers, n) if (num_speakers is not None and num_speakers > 1) else 1
 
     while len(clusters) > target_k:
-        best_dist = 999.0
-        best_pair = (-1, -1)
-        m = len(clusters)
-        for i in range(m):
-            ci = clusters[i]
-            for j in range(i + 1, m):
-                cj = clusters[j]
-                avg_d = float(np.mean(dist_mat[np.ix_(ci, cj)]))
-                if avg_d < best_dist:
-                    best_dist = avg_d
-                    best_pair = (i, j)
+        flat_idx = int(np.argmin(dist_mat))
+        i_keep, j_merge = divmod(flat_idx, n)
+        best_dist = float(dist_mat[i_keep, j_merge])
 
-        if best_pair[0] < 0:
+        if not np.isfinite(best_dist):
             break
         if (num_speakers is None or num_speakers <= 1) and best_dist > distance_threshold:
             break
 
-        i_keep, j_merge = best_pair
+        if i_keep > j_merge:
+            i_keep, j_merge = j_merge, i_keep
+
+        # UPGMA (average-linkage) distance update for merged cluster i_keep <- i_keep U j_merge
+        s_i = sizes[i_keep]
+        s_j = sizes[j_merge]
+        new_size = s_i + s_j
+        new_dists = (s_i * dist_mat[i_keep, :] + s_j * dist_mat[j_merge, :]) / new_size
+        new_dists[~active] = np.inf
+        new_dists[i_keep] = np.inf
+        new_dists[j_merge] = np.inf
+
+        dist_mat[i_keep, :] = new_dists
+        dist_mat[:, i_keep] = new_dists
+        dist_mat[j_merge, :] = np.inf
+        dist_mat[:, j_merge] = np.inf
+
+        sizes[i_keep] = new_size
+        active[j_merge] = False
         clusters[i_keep].extend(clusters.pop(j_merge))
 
     labels = np.ones(n, dtype=int)
-    for cluster_idx, member_indices in enumerate(clusters, start=1):
+    for cluster_idx, member_indices in enumerate(clusters.values(), start=1):
         for idx in member_indices:
             labels[idx] = cluster_idx
     return labels
@@ -118,24 +136,43 @@ class LocalSpeakerDiarizer:
     def __init__(self, similarity_threshold: float = 0.44):
         self.similarity_threshold = similarity_threshold
         self._extractor: Optional[ort.InferenceSession] = None
+        self._loaded_model_id: str = ""
 
     def _get_extractor(self) -> Optional[ort.InferenceSession]:
-        if self._extractor is not None:
-            return self._extractor
-        if not is_speaker_model_downloaded():
+        active_id = app_config.get_active_diarization_model()
+        if active_id == "none":
+            self._extractor = None
+            self._loaded_model_id = "none"
             return None
+        if self._extractor is not None and self._loaded_model_id == active_id:
+            return self._extractor
+
+        # Pick active model if downloaded, else fall back to any downloaded diarization model
+        chosen_id = active_id
+        if not is_diarization_model_downloaded(chosen_id):
+            chosen_id = next(
+                (
+                    m["id"]
+                    for m in app_config.SPEAKER_DIARIZATION_MODELS
+                    if m["id"] != "none" and is_diarization_model_downloaded(m["id"])
+                ),
+                "",
+            )
+        if not chosen_id:
+            return None
+
+        model_path = get_diarization_model_path(chosen_id)
+        if model_path is None or not model_path.exists():
+            return None
+
         try:
-            model_path = app_config.SPEAKER_EMBEDDING_MODEL_PATH
             sess_opts = ort.SessionOptions()
             sess_opts.intra_op_num_threads = 2
-            self._extractor = ort.InferenceSession(
-                str(model_path),
-                sess_options=sess_opts,
-                providers=["CPUExecutionProvider"],
-            )
+            self._extractor = app_config.create_ort_session(str(model_path), sess_opts)
+            self._loaded_model_id = active_id
             return self._extractor
         except Exception as exc:
-            print(f"[Diarizer] Could not load local ONNX speaker model, using spectral voiceprint fallback: {exc}")
+            print(f"[Diarizer] Could not load local ONNX speaker model '{chosen_id}', using spectral voiceprint fallback: {exc}")
             return None
 
     def extract_embedding(self, audio_16k: np.ndarray) -> Optional[np.ndarray]:
@@ -194,6 +231,9 @@ class LocalSpeakerDiarizer:
         Match an utterance's audio against existing speakers in `session_embeddings` (isolated per session).
         Updates the centroid for the matched speaker or creates `speaker_N` if it's a genuinely distinct voice.
         """
+        if app_config.get_active_diarization_model() == "none":
+            return "speaker_1", session_embeddings
+
         duration_sec = len(audio_16k) / float(SAMPLE_RATE)
         emb = self.extract_embedding(audio_16k)
         if emb is None:
@@ -247,29 +287,56 @@ class LocalSpeakerDiarizer:
         session_embeddings[new_spk_id] = emb.tolist()
         return new_spk_id, session_embeddings
 
+    def _snap_to_energy_valley(
+        self,
+        full_audio_16k: np.ndarray,
+        approx_t: float,
+        min_t: float,
+        max_t: float,
+        radius_sec: float = 0.35,
+    ) -> float:
+        """Snap a candidate split timestamp to the local minimum acoustic energy within ±radius_sec."""
+        total_dur = len(full_audio_16k) / float(SAMPLE_RATE)
+        search_s = max(min_t, approx_t - radius_sec)
+        search_e = min(max_t, approx_t + radius_sec)
+        best_t = round(min(total_dur, max(0.0, float(approx_t))), 2)
+        if search_e <= search_s:
+            return best_t
+        min_e = 999.0
+        for cand_t in np.arange(search_s, search_e, 0.05):
+            w_s = max(0, int((cand_t - 0.05) * SAMPLE_RATE))
+            w_e = min(len(full_audio_16k), int((cand_t + 0.05) * SAMPLE_RATE))
+            w = full_audio_16k[w_s:w_e]
+            if len(w) > 0:
+                e_val = float(np.sqrt(np.mean(w**2)))
+                if e_val < min_e:
+                    min_e = e_val
+                    best_t = round(min(total_dur, max(0.0, float(cand_t))), 2)
+        return best_t
+
     def split_segments_on_speaker_change(
         self,
         full_audio_16k: np.ndarray,
         segments_times: List[Tuple[float, float]],
-        win_sec: float = 1.6,
-        hop_sec: float = 0.8,
-        change_sim_thresh: float = 0.22,
+        win_sec: float = 1.4,
+        hop_sec: float = 0.7,
+        change_sim_thresh: float = 0.36,
     ) -> List[Tuple[float, float]]:
         """
         Detect intra-segment speaker changes in continuous TV/interview/meeting audio
         where one person finishes speaking and another person starts with <0.4s silence.
-        Splits any segment >= 3.6s where the sliding-window 3D-Speaker voice embedding
-        shifts abruptly (cosine similarity < `change_sim_thresh`), snapping the cut point
-        to the local minimum acoustic energy within ±0.40s.
+        Splits any segment >= 3.2s where the sliding-window 3D-Speaker voice embedding
+        shifts abruptly (local similarity valley < `change_sim_thresh`), snapping the cut
+        point to the local minimum acoustic energy within ±0.35s.
         """
-        if not segments_times or len(full_audio_16k) == 0:
+        if not segments_times or len(full_audio_16k) == 0 or app_config.get_active_diarization_model() == "none":
             return segments_times
 
         total_dur = len(full_audio_16k) / float(SAMPLE_RATE)
-        # For very long recordings (> 10 minutes, e.g. 1-2 hour MP4 meetings), use a faster hop
-        # and only inspect longer continuous segments (>= 5.5s) so diarization remains snappy.
-        effective_hop = max(hop_sec, 1.6) if total_dur > 600.0 else hop_sec
-        min_split_dur = 5.5 if total_dur > 600.0 else 3.6
+        # Keep hop responsive even on 1-2 hour recordings so rapid back-and-forth
+        # speaker turns are still detected accurately.
+        effective_hop = max(hop_sec, 0.85) if total_dur > 600.0 else hop_sec
+        min_split_dur = 3.6 if total_dur > 600.0 else 3.2
         refined: List[Tuple[float, float]] = []
 
         for s_sec, e_sec in segments_times:
@@ -281,11 +348,11 @@ class LocalSpeakerDiarizer:
             times: List[float] = []
             embs: List[np.ndarray] = []
             t = s_sec
-            while t + win_sec <= e_sec + 0.05:
+            while t + win_sec <= e_sec + 0.15:
                 c_start = max(0, int(t * SAMPLE_RATE))
                 c_end = min(len(full_audio_16k), int((t + win_sec) * SAMPLE_RATE))
                 clip = full_audio_16k[c_start:c_end]
-                if len(clip) >= int(SAMPLE_RATE * 0.4) and float(np.sqrt(np.mean(clip**2))) >= 0.008:
+                if len(clip) >= int(SAMPLE_RATE * 0.4) and float(np.sqrt(np.mean(clip**2))) >= 0.005:
                     emb = self.extract_embedding(clip)
                     if emb is not None:
                         times.append(t + win_sec / 2.0)
@@ -296,35 +363,138 @@ class LocalSpeakerDiarizer:
                 refined.append((s_sec, e_sec))
                 continue
 
-            cur_start = s_sec
-            last_split_idx = 0
+            # Precompute boundary similarities between preceding and following windows
+            # Use 1-2 window spans (not wider) so transitions aren't smeared out
+            sims: List[float] = [1.0] * len(embs)
             for i in range(1, len(embs) - 1):
-                if (times[i] - cur_start) < 1.8 or (e_sec - times[i]) < 1.8:
-                    continue
-                prev_mean = np.mean(embs[max(last_split_idx, i - 2) : i], axis=0)
+                prev_mean = np.mean(embs[max(0, i - 2) : i], axis=0)
                 next_mean = np.mean(embs[i : min(len(embs), i + 2)], axis=0)
-                sim = _cosine_similarity(prev_mean, next_mean)
-                if sim < change_sim_thresh:
-                    search_s = max(cur_start + 1.2, times[i] - 0.40)
-                    search_e = min(e_sec - 1.2, times[i] + 0.40)
-                    best_t = round(float(times[i]), 2)
-                    min_e = 999.0
-                    for cand_t in np.arange(search_s, search_e, 0.05):
-                        w_s = max(0, int((cand_t - 0.05) * SAMPLE_RATE))
-                        w_e = min(len(full_audio_16k), int((cand_t + 0.05) * SAMPLE_RATE))
-                        w = full_audio_16k[w_s:w_e]
-                        if len(w) > 0:
-                            e_val = float(np.sqrt(np.mean(w**2)))
-                            if e_val < min_e:
-                                min_e = e_val
-                                best_t = round(min(total_dur, max(0.0, float(cand_t))), 2)
+                sims[i] = _cosine_similarity(prev_mean, next_mean)
+
+            cur_start = s_sec
+            for i in range(1, len(embs) - 1):
+                if (times[i] - cur_start) < 1.3 or (e_sec - times[i]) < 1.3:
+                    continue
+                sim = sims[i]
+                # Require a local valley (or strong drop) below change_sim_thresh
+                is_local_valley = sim <= sims[i - 1] and sim <= sims[i + 1]
+                if sim < change_sim_thresh and (is_local_valley or sim < change_sim_thresh - 0.10):
+                    best_t = self._snap_to_energy_valley(
+                        full_audio_16k,
+                        times[i],
+                        min_t=cur_start + 1.0,
+                        max_t=e_sec - 1.0,
+                        radius_sec=0.35,
+                    )
                     if (best_t - cur_start) >= 1.0 and (e_sec - best_t) >= 1.0:
                         refined.append((cur_start, best_t))
                         cur_start = best_t
-                        last_split_idx = i
             refined.append((cur_start, e_sec))
 
         return refined
+
+    def refine_segments_with_centroids(
+        self,
+        full_audio_16k: np.ndarray,
+        segments_times: List[Tuple[float, float]],
+        speaker_ids: List[str],
+        centroids: Dict[str, List[float]],
+        min_dur_sec: float = 5.0,
+        win_sec: float = 1.4,
+        hop_sec: float = 0.7,
+        margin: float = 0.08,
+    ) -> Tuple[List[Tuple[float, float]], List[str]]:
+        """
+        Post-clustering refinement: now that we know the exact voice centroids for each
+        speaker in this session, scan any longer segment (>= 5.0s) with a sliding window
+        scored directly against those centroids. If the winning speaker flips cleanly and
+        holds for >= 2 consecutive windows with a clear similarity margin, split the segment
+        at the transition so two speakers are never lumped into one giant block.
+        """
+        if len(centroids) < 2 or not segments_times or len(full_audio_16k) == 0:
+            return segments_times, speaker_ids
+
+        centroid_vecs = {
+            spk_id: np.array(vec, dtype=np.float32)
+            for spk_id, vec in centroids.items()
+            if len(vec) > 0
+        }
+        if len(centroid_vecs) < 2:
+            return segments_times, speaker_ids
+
+        out_times: List[Tuple[float, float]] = []
+        out_spks: List[str] = []
+
+        for (s_sec, e_sec), orig_spk in zip(segments_times, speaker_ids):
+            dur = e_sec - s_sec
+            if dur < min_dur_sec:
+                out_times.append((s_sec, e_sec))
+                out_spks.append(orig_spk)
+                continue
+
+            win_times: List[float] = []
+            win_spks: List[str] = []
+            win_margins: List[float] = []
+            t = s_sec
+            while t + win_sec <= e_sec + 0.15:
+                c_start = max(0, int(t * SAMPLE_RATE))
+                c_end = min(len(full_audio_16k), int((t + win_sec) * SAMPLE_RATE))
+                clip = full_audio_16k[c_start:c_end]
+                if len(clip) >= int(SAMPLE_RATE * 0.4) and float(np.sqrt(np.mean(clip**2))) >= 0.005:
+                    emb = self.extract_embedding(clip)
+                    if emb is not None:
+                        scores = sorted(
+                            (
+                                (_cosine_similarity(emb, c_vec), spk_id)
+                                for spk_id, c_vec in centroid_vecs.items()
+                                if c_vec.shape == emb.shape
+                            ),
+                            reverse=True,
+                        )
+                        if len(scores) >= 2:
+                            win_times.append(t + win_sec / 2.0)
+                            win_spks.append(scores[0][1])
+                            win_margins.append(scores[0][0] - scores[1][0])
+                t += hop_sec
+
+            if len(win_spks) < 4 or len(set(win_spks)) < 2:
+                out_times.append((s_sec, e_sec))
+                out_spks.append(orig_spk)
+                continue
+
+            # Walk windows and only commit a speaker switch when the new speaker wins
+            # >= 2 consecutive windows with average confidence margin >= `margin`.
+            cur_start = s_sec
+            cur_spk = win_spks[0]
+            idx = 1
+            while idx < len(win_spks) - 1:
+                cand_spk = win_spks[idx]
+                if (
+                    cand_spk != cur_spk
+                    and win_spks[idx + 1] == cand_spk
+                    and ((win_margins[idx] + win_margins[idx + 1]) * 0.5) >= margin
+                ):
+                    approx_t = 0.5 * (win_times[idx - 1] + win_times[idx])
+                    best_t = self._snap_to_energy_valley(
+                        full_audio_16k,
+                        approx_t,
+                        min_t=cur_start + 1.0,
+                        max_t=e_sec - 1.0,
+                        radius_sec=0.35,
+                    )
+                    if (best_t - cur_start) >= 1.0 and (e_sec - best_t) >= 1.0:
+                        out_times.append((cur_start, best_t))
+                        out_spks.append(cur_spk)
+                        cur_start = best_t
+                        cur_spk = cand_spk
+                        idx += 2
+                        continue
+                idx += 1
+
+            out_times.append((cur_start, e_sec))
+            out_spks.append(cur_spk)
+
+        return out_times, out_spks
 
     def cluster_segments_batch(
         self,
@@ -339,6 +509,8 @@ class LocalSpeakerDiarizer:
         """
         if not segments_times:
             return [], {}
+        if app_config.get_active_diarization_model() == "none":
+            return ["speaker_1"] * len(segments_times), {}
 
         embeddings: List[np.ndarray] = []
         durations: List[float] = []
@@ -374,7 +546,7 @@ class LocalSpeakerDiarizer:
             anchor_labels = _agglomerative_average_cosine_numpy(
                 anchor_embs,
                 num_speakers=num_speakers,
-                distance_threshold=0.64,
+                distance_threshold=0.56,
             )
         except Exception as exc:
             print(f"[Diarizer] Fallback to online clustering: {exc}")
@@ -422,8 +594,8 @@ class LocalSpeakerDiarizer:
             if best_pair is None:
                 break
 
-            # Merge if centroid similarity >= 0.40, or if we have more clusters than target_max
-            if best_sim >= 0.40 or len(cluster_vecs) > target_max:
+            # Merge if centroid similarity >= 0.50, or if we have more clusters than target_max
+            if best_sim >= 0.50 or len(cluster_vecs) > target_max:
                 c_keep, c_merge = best_pair
                 cluster_vecs[c_keep].extend(cluster_vecs.pop(c_merge))
                 continue

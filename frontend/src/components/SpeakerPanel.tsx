@@ -126,10 +126,10 @@ export const SpeakerPanel: React.FC<SpeakerPanelProps> = ({
                       }
                     : undefined
                 }
-                className={`rounded-xl p-3 space-y-2.5 transition-all duration-200 ${
+                className={`rounded-xl p-3 space-y-2.5 transition-colors border-2 ${
                   isActiveSpeaker
-                    ? 'bg-slate-800/95 border-2 scale-[1.01]'
-                    : 'bg-slate-800/60 border border-slate-700/70 hover:border-slate-600'
+                    ? 'bg-slate-800/95'
+                    : 'bg-slate-800/60 border-slate-700/70 hover:border-slate-600'
                 }`}
               >
                 {/* Top row: Color badge, Name / Edit, Active Speaking Badge, Merge button, Sample audio playback */}

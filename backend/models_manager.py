@@ -31,9 +31,11 @@ import config
 from config import (
     CLARIFICATION_MODELS,
     DEFAULT_CLARIFICATION_MODEL,
+    DEFAULT_DIARIZATION_MODEL,
     DEFAULT_WHISPER_MODEL,
     NLLB_REPO_ID,
     OPUS_PAIR_REPOS,
+    SPEAKER_DIARIZATION_MODELS,
     SPEAKER_EMBEDDING_MODEL_URL,
     TRANSLATION_MODELS,
     WHISPER_MODELS,
@@ -41,6 +43,7 @@ from config import (
 
 WHISPER_MAP = {m["id"]: m for m in WHISPER_MODELS}
 CLARIFICATION_MAP = {m["id"]: m for m in CLARIFICATION_MODELS}
+DIARIZATION_MAP = {m["id"]: m for m in SPEAKER_DIARIZATION_MODELS}
 
 
 def _get_ssl_contexts() -> List[ssl.SSLContext]:
@@ -124,7 +127,142 @@ def hf_hub_download(repo_id: str, filename: str, local_dir: str) -> str:
     return str(_download_url_to_path(url, dest, label=f"{repo_id.split('/')[-1]}/{Path(filename).name}"))
 
 
+def _safe_custom_model_dir(folder_name: str) -> Optional[Path]:
+    """Safely resolve a direct child folder inside `config.MODELS_DIR` (blocks path traversal)."""
+    clean = (folder_name or "").strip()
+    if not clean or "/" in clean or "\\" in clean or ".." in clean or clean in (".", "hf_cache"):
+        return None
+    root = config.MODELS_DIR.resolve()
+    cand = (root / clean).resolve()
+    if cand.parent != root or not cand.is_dir():
+        return None
+    return cand
+
+
+def _detect_custom_stt_paths(folder: Path) -> Optional[Dict[str, Path]]:
+    """
+    Auto-detect whether an arbitrary local folder inside `models/` is a usable
+    Speech-to-Text ONNX model (`hf-whisper-onnx`, `wav2vec2-onnx`, or `sherpa-onnx`).
+    """
+    if not folder.is_dir():
+        return None
+
+    onnx_dir = folder / "onnx"
+    # 1. HuggingFace Optimum Whisper ONNX (encoder_model*.onnx + decoder_model_merged*.onnx + tokenizer.json)
+    if (folder / "tokenizer.json").exists() and onnx_dir.is_dir():
+        encoders = sorted(onnx_dir.glob("encoder_model*.onnx"))
+        decoders = sorted(onnx_dir.glob("decoder_model_merged*.onnx")) or sorted(
+            onnx_dir.glob("decoder_model*.onnx")
+        )
+        if encoders and decoders:
+            return {
+                "dir": folder,
+                "encoder": encoders[0],
+                "decoder": decoders[0],
+                "tokens": folder / "tokenizer.json",
+                "engine": Path("hf-whisper-onnx"),
+            }
+
+    # 2. Wav2Vec2 CTC ONNX (vocab.json + onnx/model*.onnx or *.onnx)
+    if (folder / "vocab.json").exists():
+        w2v_files = sorted(onnx_dir.glob("*.onnx")) if onnx_dir.is_dir() else []
+        if not w2v_files:
+            w2v_files = sorted(folder.glob("*.onnx"))
+        if w2v_files:
+            return {
+                "dir": folder,
+                "encoder": w2v_files[0],
+                "decoder": w2v_files[0],
+                "tokens": folder / "vocab.json",
+                "engine": Path("wav2vec2-onnx"),
+            }
+
+    # 3. Sherpa-ONNX Whisper (*-encoder*.onnx + *-decoder*.onnx + *-tokens.txt)
+    s_enc = sorted(folder.glob("*-encoder*.onnx"))
+    s_dec = sorted(folder.glob("*-decoder*.onnx"))
+    s_tok = sorted(folder.glob("*-tokens.txt"))
+    if s_enc and s_dec and s_tok:
+        return {
+            "dir": folder,
+            "encoder": s_enc[0],
+            "decoder": s_dec[0],
+            "tokens": s_tok[0],
+        }
+
+    return None
+
+
+def _dir_size_mb(folder: Path) -> int:
+    total = 0
+    try:
+        for p in folder.rglob("*"):
+            if p.is_file():
+                try:
+                    total += p.stat().st_size
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return max(1, int(round(total / (1024 * 1024)))) if total > 0 else 0
+
+
+def _discover_unmanaged_local_models() -> List[Dict]:
+    """
+    Scan `config.MODELS_DIR` for any folders not in the built-in catalog:
+    - Custom user-added ONNX Speech-to-Text models (automatically usable!)
+    - Old / legacy / removed model folders left on disk (easy 1-click cleanup!)
+    """
+    if not config.MODELS_DIR.exists():
+        return []
+
+    known_dirs = {"hf_cache", "speaker_embedding", config.NLLB_LOCAL_DIR.name}
+    for m in WHISPER_MODELS:
+        known_dirs.add(get_whisper_model_dir(m["id"]).name)
+    for cm in CLARIFICATION_MODELS:
+        if cm["id"] not in ("none", "whisper-context"):
+            known_dirs.add(get_clarification_model_dir(cm["id"]).name)
+    for pair in OPUS_PAIR_REPOS.keys():
+        known_dirs.add(get_opus_pair_dir(pair).name)
+
+    found: List[Dict] = []
+    for entry in sorted(config.MODELS_DIR.iterdir(), key=lambda p: p.name.lower()):
+        if not entry.is_dir() or entry.name in known_dirs or entry.name.startswith("."):
+            continue
+        stt_paths = _detect_custom_stt_paths(entry)
+        size_mb = _dir_size_mb(entry)
+        if stt_paths is not None:
+            engine = str(stt_paths.get("engine", "sherpa-onnx"))
+            custom_id = f"custom:{entry.name}"
+            found.append(
+                {
+                    "folder_name": entry.name,
+                    "custom_whisper_id": custom_id,
+                    "kind": "custom_stt",
+                    "engine": engine,
+                    "size_mb": str(size_mb),
+                    "local_path": str(entry),
+                }
+            )
+        else:
+            found.append(
+                {
+                    "folder_name": entry.name,
+                    "custom_whisper_id": "",
+                    "kind": "legacy",
+                    "engine": "unknown",
+                    "size_mb": str(size_mb),
+                    "local_path": str(entry),
+                }
+            )
+    return found
+
+
 def get_whisper_model_dir(model_id: str) -> Path:
+    if model_id.startswith("custom:"):
+        custom_dir = _safe_custom_model_dir(model_id[len("custom:") :])
+        if custom_dir is not None:
+            return custom_dir
+        return config.MODELS_DIR / model_id[len("custom:") :]
     if model_id == "large-v3-turbo":
         model_id = "turbo"
     elif model_id == "hviske-v2-fp16":
@@ -133,6 +271,14 @@ def get_whisper_model_dir(model_id: str) -> Path:
 
 
 def get_whisper_onnx_paths(model_id: str) -> Dict[str, Path]:
+    if model_id.startswith("custom:"):
+        custom_dir = _safe_custom_model_dir(model_id[len("custom:") :])
+        if custom_dir is not None:
+            detected = _detect_custom_stt_paths(custom_dir)
+            if detected is not None:
+                return detected
+        missing = config.MODELS_DIR / "__missing__"
+        return {"dir": missing, "encoder": missing, "decoder": missing, "tokens": missing}
     if model_id == "large-v3-turbo":
         model_id = "turbo"
     elif model_id == "hviske-v2-fp16":
@@ -192,10 +338,33 @@ def resolve_local_whisper_model(model_id: str = DEFAULT_WHISPER_MODEL) -> Dict[s
     )
 
 
-def is_speaker_model_downloaded() -> bool:
-    return (
-        config.SPEAKER_EMBEDDING_MODEL_PATH.exists()
-        and config.SPEAKER_EMBEDDING_MODEL_PATH.stat().st_size > 1_000_000
+def get_diarization_model_path(model_id: Optional[str] = None) -> Optional[Path]:
+    mid = (model_id or config.get_active_diarization_model()).strip()
+    if mid == "none":
+        return None
+    info = DIARIZATION_MAP.get(mid) or DIARIZATION_MAP.get(DEFAULT_DIARIZATION_MODEL)
+    if not info or not info.get("filename"):
+        return None
+    return config.MODELS_DIR / "speaker_embedding" / info["filename"]
+
+
+def is_diarization_model_downloaded(model_id: Optional[str] = None) -> bool:
+    mid = (model_id or config.get_active_diarization_model()).strip()
+    if mid == "none":
+        return True
+    p = get_diarization_model_path(mid)
+    return bool(p is not None and p.exists() and p.stat().st_size > 1_000_000)
+
+
+def is_speaker_model_downloaded(model_id: Optional[str] = None) -> bool:
+    if model_id is not None:
+        return is_diarization_model_downloaded(model_id)
+    if is_diarization_model_downloaded(config.get_active_diarization_model()):
+        return True
+    return any(
+        is_diarization_model_downloaded(m["id"])
+        for m in SPEAKER_DIARIZATION_MODELS
+        if m["id"] != "none"
     )
 
 
@@ -237,15 +406,17 @@ def is_clarification_model_downloaded(model_id: str) -> bool:
         return True
     d = get_clarification_model_dir(model_id)
     onnx_rel = info.get("onnx_file", "onnx/model_q4.onnx")
+    extra_rels = [f.strip() for f in info.get("onnx_extra_files", "").split(",") if f.strip()]
     return (
         (d / onnx_rel).exists()
+        and all((d / ef).exists() for ef in extra_rels)
         and (d / "tokenizer.json").exists()
         and (d / "config.json").exists()
     )
 
 
 def ensure_clarification_model(model_id: str = DEFAULT_CLARIFICATION_MODEL) -> Path:
-    """Download a local ONNX Context Clarification LLM (e.g. Qwen2.5-0.5B or Qwen2.5-1.5B ONNX Q4)."""
+    """Download a local ONNX Context Clarification LLM (e.g. DanskGPT, EuroLLM, Gemma 3, Qwen 3, Llama 3.2, Phi-4)."""
     if model_id in ("none", "whisper-context"):
         return config.MODELS_DIR
     info = CLARIFICATION_MAP.get(model_id)
@@ -257,8 +428,9 @@ def ensure_clarification_model(model_id: str = DEFAULT_CLARIFICATION_MODEL) -> P
     target_dir.mkdir(parents=True, exist_ok=True)
     repo_id = info["hf_repo"]
     onnx_rel = info.get("onnx_file", "onnx/model_q4.onnx")
+    extra_rels = [f.strip() for f in info.get("onnx_extra_files", "").split(",") if f.strip()]
     print(f"[ModelManager] Downloading Context Clarifier '{model_id}' from {repo_id} to {target_dir} ...")
-    for fname in ("config.json", "tokenizer.json", "tokenizer_config.json", onnx_rel):
+    for fname in ("config.json", "tokenizer.json", "tokenizer_config.json", onnx_rel, *extra_rels):
         hf_hub_download(repo_id=repo_id, filename=fname, local_dir=str(target_dir))
     return target_dir
 
@@ -347,18 +519,22 @@ def ensure_whisper_model(model_id: str = DEFAULT_WHISPER_MODEL) -> Dict[str, Pat
     return paths
 
 
-def ensure_speaker_model() -> Path:
-    """Ensure the ONNX speaker embedding model is stored locally."""
-    if is_speaker_model_downloaded():
-        return config.SPEAKER_EMBEDDING_MODEL_PATH
+def ensure_speaker_model(model_id: Optional[str] = None) -> Path:
+    """Ensure the requested ONNX speaker embedding model is stored locally."""
+    mid = (model_id or config.get_active_diarization_model()).strip()
+    if mid == "none":
+        return config.MODELS_DIR / "speaker_embedding"
+    info = DIARIZATION_MAP.get(mid) or DIARIZATION_MAP.get(DEFAULT_DIARIZATION_MODEL)
+    assert info is not None
+    target_path = config.MODELS_DIR / "speaker_embedding" / info["filename"]
+    if target_path.exists() and target_path.stat().st_size > 1_000_000:
+        return target_path
 
-    config.SPEAKER_EMBEDDING_MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
     print(
-        f"[ModelManager] Downloading Speaker Embedding ONNX model to {config.SPEAKER_EMBEDDING_MODEL_PATH} ..."
+        f"[ModelManager] Downloading Speaker Embedding ONNX '{mid}' to {target_path} ..."
     )
-    return _download_url_to_path(
-        SPEAKER_EMBEDDING_MODEL_URL, config.SPEAKER_EMBEDDING_MODEL_PATH
-    )
+    return _download_url_to_path(info["url"], target_path)
 
 
 def ensure_nllb_model() -> Path:
@@ -385,18 +561,30 @@ def ensure_nllb_model() -> Path:
 
 
 def delete_local_model(model_type: str, model_id: str = "") -> None:
-    """Delete a downloaded local AI model from disk to free up storage."""
-    if model_type == "whisper":
-        target_dir = get_whisper_model_dir(model_id)
-        if target_dir.exists():
+    """Delete a downloaded local AI model (or custom/legacy model folder) from disk to free up storage."""
+    if model_type == "custom":
+        target_dir = _safe_custom_model_dir(model_id)
+        if target_dir is not None and target_dir.exists():
             shutil.rmtree(target_dir, ignore_errors=True)
-    elif model_type in ("opus", "opus-mt-da-en") or (
+    elif model_type == "whisper":
+        if model_id.startswith("custom:"):
+            target_dir = _safe_custom_model_dir(model_id[len("custom:") :])
+        else:
+            target_dir = get_whisper_model_dir(model_id)
+        if target_dir is not None and target_dir.exists():
+            shutil.rmtree(target_dir, ignore_errors=True)
+    elif model_type in ("opus", "opus_pair", "opus-mt-da-en") or (
         model_type == "translation" and model_id == "opus-mt-da-en"
     ):
-        for pair in ("da-en", "en-da"):
-            d = get_opus_pair_dir(pair)
+        if model_id and model_id in OPUS_PAIR_REPOS:
+            d = get_opus_pair_dir(model_id)
             if d.exists():
                 shutil.rmtree(d, ignore_errors=True)
+        else:
+            for pair in ("da-en", "en-da"):
+                d = get_opus_pair_dir(pair)
+                if d.exists():
+                    shutil.rmtree(d, ignore_errors=True)
     elif model_type in ("nllb", "nllb-200-600M") or (
         model_type == "translation" and model_id == "nllb-200-600M"
     ):
@@ -408,7 +596,11 @@ def delete_local_model(model_type: str, model_id: str = "") -> None:
             if d.exists():
                 shutil.rmtree(d, ignore_errors=True)
     elif model_type == "speaker":
-        if config.SPEAKER_EMBEDDING_MODEL_PATH.exists():
+        if model_id and model_id in DIARIZATION_MAP:
+            p = get_diarization_model_path(model_id)
+            if p is not None and p.exists():
+                p.unlink(missing_ok=True)
+        elif config.SPEAKER_EMBEDDING_MODEL_PATH.exists():
             config.SPEAKER_EMBEDDING_MODEL_PATH.unlink(missing_ok=True)
 
 
@@ -423,6 +615,7 @@ def get_system_hardware_recommendations() -> Dict:
     cpu_name = platform.processor() or "x64 Processor"
     total_ram_gb = 8.0
     avail_ram_gb = 4.0
+    gpu_name = ""
 
     if sys.platform == "win32":
         try:
@@ -435,6 +628,31 @@ def get_system_hardware_recommendations() -> Dict:
             val, _ = winreg.QueryValueEx(key, "ProcessorNameString")
             if val and str(val).strip():
                 cpu_name = str(val).strip()
+        except Exception:
+            pass
+
+        # Detect primary hardware GPU via Windows Display Adapter registry class (zero subprocess overhead)
+        try:
+            import winreg
+
+            disp_class = r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
+            candidates: List[str] = []
+            for sub_i in range(8):
+                try:
+                    k = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, f"{disp_class}\\{sub_i:04d}")
+                    desc, _ = winreg.QueryValueEx(k, "DriverDesc")
+                    desc_s = str(desc).strip()
+                    if desc_s and "microsoft basic" not in desc_s.lower() and "virtual" not in desc_s.lower():
+                        candidates.append(desc_s)
+                except Exception:
+                    continue
+            if candidates:
+                # Prefer discrete NVIDIA / AMD Radeon / Intel Arc over integrated graphics
+                discrete = [
+                    c for c in candidates
+                    if any(b in c.lower() for b in ("nvidia", "geforce", "rtx", "gtx", "quadro", "radeon", "arc"))
+                ]
+                gpu_name = discrete[0] if discrete else candidates[0]
         except Exception:
             pass
 
@@ -514,25 +732,72 @@ def get_system_hardware_recommendations() -> Dict:
         except Exception:
             pass
 
-    if total_ram_gb >= 15.0 and cpu_threads >= 8:
+    gpu_provider = config.get_preferred_gpu_provider()
+    gpu_detected = bool(gpu_name) or bool(gpu_provider)
+    gpu_enabled = config.get_gpu_acceleration_enabled() if gpu_detected else False
+    has_discrete_gpu = gpu_enabled and any(
+        b in gpu_name.lower()
+        for b in ("nvidia", "geforce", "rtx", "gtx", "quadro", "radeon", "rx ", "arc")
+    )
+
+    if (has_discrete_gpu and total_ram_gb >= 7.5) or (
+        gpu_enabled and total_ram_gb >= 15.0
+    ):
         tier = "high"
-        tier_label = "High-Performance Workstation"
+        tier_label = "GPU-Accelerated Workstation"
+        rec_multilingual = "turbo"
+        rec_danish = "hviske-v2-int8"
+        rec_clarifier = "qwen2.5-1.5b" if total_ram_gb >= 15.0 else "qwen2.5-0.5b"
+        recommended_ids = [
+            "turbo",
+            "large-v3",
+            "hviske-v2-int8",
+            "roest-v3-315m",
+            "distil-large-v3.5",
+            "kb-whisper-medium",
+            "whisper-turbo-de",
+            "whisper-es",
+            "whisper-medium-fr",
+        ]
+        summary = (
+            f"GPU Acceleration is enabled ({gpu_name or gpu_provider}). Your system can comfortably run "
+            "the largest high-precision models (Large-v3-Turbo, Hviske v2 INT8, and Qwen Context Clarifier)."
+        )
+    elif total_ram_gb >= 15.0 and cpu_threads >= 8:
+        tier = "high"
+        tier_label = "High-Performance CPU Workstation"
         rec_multilingual = "turbo"
         rec_danish = "hviske-v2-int8"
         rec_clarifier = "whisper-context"
-        recommended_ids = ["turbo", "large-v3", "hviske-v2-int8", "roest-v3-315m"]
+        recommended_ids = [
+            "turbo",
+            "hviske-v2-int8",
+            "roest-v3-315m",
+            "distil-large-v3.5",
+            "kb-whisper-medium",
+            "whisper-turbo-de",
+        ]
         summary = (
-            f"Your PC has strong specs ({cpu_threads} threads, {total_ram_gb} GB RAM) and can easily run the "
-            "largest high-precision models: 'Hviske v2 High-Precision (INT8)' or 'Røst v3 315M (FP16)' for Danish, "
-            "and 'Whisper Large-v3-Turbo' or 'Large-v3 Full' for multi-language."
+            f"Your CPU has strong specs ({cpu_threads} threads, {total_ram_gb} GB RAM) and can run "
+            "high-precision models like Hviske v2 INT8, Røst v3 315M, and Whisper Large-v3-Turbo."
         )
-    elif total_ram_gb >= 7.5 and cpu_threads >= 6:
+    elif (gpu_enabled and total_ram_gb >= 6.0) or (
+        total_ram_gb >= 7.5 and cpu_threads >= 6
+    ):
         tier = "balanced"
-        tier_label = "Balanced Desktop / Laptop"
+        tier_label = (
+            "GPU-Assisted Balanced PC" if gpu_enabled else "Balanced Desktop / Laptop"
+        )
         rec_multilingual = "small"
         rec_danish = "hviske-v2"
         rec_clarifier = "whisper-context"
-        recommended_ids = ["small", "hviske-v2", "roest-v3-315m"]
+        recommended_ids = [
+            "small",
+            "hviske-v2",
+            "roest-v3-315m",
+            "nb-whisper-small",
+            "whisper-small-it",
+        ]
         summary = (
             f"Your PC ({cpu_threads} threads, {total_ram_gb} GB RAM) is well-suited for 'Hviske v2 (Q4)' or "
             "'Røst v3 315M' for Danish, and 'Whisper Small' for fast multi-language transcription."
@@ -543,7 +808,7 @@ def get_system_hardware_recommendations() -> Dict:
         rec_multilingual = "base"
         rec_danish = "roest-315m"
         rec_clarifier = "whisper-context"
-        recommended_ids = ["base", "small", "roest-315m"]
+        recommended_ids = ["base", "small", "roest-315m", "nb-whisper-small", "whisper-small-it"]
         summary = (
             f"For smooth performance on {cpu_threads} threads and {total_ram_gb} GB RAM, we recommend "
             "'Røst 315M (~303 MB)' for fast Danish transcription and 'Whisper Base / Small' for multi-language."
@@ -554,6 +819,10 @@ def get_system_hardware_recommendations() -> Dict:
         "cpu_threads": cpu_threads,
         "total_ram_gb": total_ram_gb,
         "avail_ram_gb": avail_ram_gb,
+        "gpu_name": gpu_name,
+        "gpu_detected": gpu_detected,
+        "gpu_provider": gpu_provider,
+        "gpu_acceleration_enabled": gpu_enabled,
         "tier": tier,
         "tier_label": tier_label,
         "recommended_multilingual_id": rec_multilingual,
@@ -584,6 +853,23 @@ def get_models_status() -> Dict:
             }
         )
 
+    # Auto-discover custom user-added ONNX models & old/legacy model folders in `models/`
+    unmanaged_models = _discover_unmanaged_local_models()
+    for um in unmanaged_models:
+        if um["kind"] == "custom_stt" and um["custom_whisper_id"]:
+            whisper_list.append(
+                {
+                    "id": um["custom_whisper_id"],
+                    "name": f"{um['folder_name']} (Custom Local ONNX, ~{um['size_mb']} MB)",
+                    "description": f"User-supplied local {um['engine']} Speech-to-Text model discovered in your models folder.",
+                    "size_mb": um["size_mb"],
+                    "language_group": "custom",
+                    "downloaded": True,
+                    "is_custom": True,
+                    "local_path": um["local_path"],
+                }
+            )
+
     clarification_list: List[Dict] = []
     for cm in CLARIFICATION_MODELS:
         cid = cm["id"]
@@ -596,10 +882,21 @@ def get_models_status() -> Dict:
             lpath = str(get_clarification_model_dir(cid))
         clarification_list.append({**cm, "downloaded": dl, "local_path": lpath})
 
+    opus_pairs_status: Dict[str, Dict] = {}
+    for pair_key, repo_id in OPUS_PAIR_REPOS.items():
+        opus_pairs_status[pair_key] = {
+            "pair": pair_key,
+            "repo": repo_id,
+            "size_mb": "85",
+            "downloaded": is_opus_pair_downloaded(pair_key),
+            "local_path": str(get_opus_pair_dir(pair_key)),
+        }
+    any_opus_ready = any(v["downloaded"] for v in opus_pairs_status.values())
+
     translation_list: List[Dict] = []
     for tm in TRANSLATION_MODELS:
         if tm["id"] == "opus-mt-da-en":
-            dl = is_opus_da_en_ready()
+            dl = any_opus_ready
             lpath = str(get_opus_pair_dir("da-en"))
         elif tm["id"] == "nllb-200-600M":
             dl = is_nllb_model_downloaded()
@@ -612,9 +909,25 @@ def get_models_status() -> Dict:
             lpath = "Built into Whisper ASR"
         translation_list.append({**tm, "downloaded": dl, "local_path": lpath})
 
+    active_diar_id = config.get_active_diarization_model()
+    speaker_diarization_models: List[Dict] = []
+    for sm in SPEAKER_DIARIZATION_MODELS:
+        sid = sm["id"]
+        dl = is_diarization_model_downloaded(sid)
+        p = get_diarization_model_path(sid)
+        speaker_diarization_models.append(
+            {
+                **sm,
+                "downloaded": dl,
+                "local_path": str(p) if p is not None else "Single-Speaker Mode (Disabled)",
+            }
+        )
+
     spk_ready = is_speaker_model_downloaded()
     any_whisper_ready = any(w["downloaded"] for w in whisper_list)
-    any_neural_translator_ready = is_opus_da_en_ready() or is_nllb_model_downloaded()
+    any_neural_translator_ready = any_opus_ready or is_nllb_model_downloaded()
+    active_spk_info = DIARIZATION_MAP.get(active_diar_id) or SPEAKER_DIARIZATION_MODELS[0]
+    active_spk_path = get_diarization_model_path(active_diar_id)
 
     return {
         "storage_directory": str(config.DATA_DIR),
@@ -625,16 +938,20 @@ def get_models_status() -> Dict:
         "whisper_models": whisper_list,
         "clarification_models": clarification_list,
         "translation_models": translation_list,
+        "opus_pairs_status": opus_pairs_status,
+        "local_unmanaged_models": unmanaged_models,
+        "active_diarization_model": active_diar_id,
+        "speaker_diarization_models": speaker_diarization_models,
         "speaker_diarization": {
-            "id": "3dspeaker-eres2net",
-            "name": "3D-Speaker Voice Embedding (ONNX)",
-            "size_mb": "26",
-            "downloaded": spk_ready,
-            "local_path": str(config.SPEAKER_EMBEDDING_MODEL_PATH),
+            "id": active_spk_info["id"],
+            "name": active_spk_info["name"],
+            "size_mb": active_spk_info["size_mb"],
+            "downloaded": is_diarization_model_downloaded(active_diar_id),
+            "local_path": str(active_spk_path) if active_spk_path else "Single-Speaker Mode",
         },
         "translator": {
             "id": "opus-mt-da-en",
-            "name": "OPUS-MT Specialized Danish ↔ English + NLLB-200",
+            "name": "OPUS-MT Language Pair Specialists + NLLB-200",
             "size_mb": "85",
             "downloaded": any_neural_translator_ready,
             "local_path": str(get_opus_pair_dir("da-en")),

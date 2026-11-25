@@ -60,7 +60,7 @@ class MeetingSession:
     updated_at: float
     session_type: str = "file"   # "file" or "live"
     source_file_name: str = ""
-    target_language: str = "en"  # Single output language for the meeting (or "none" to skip translation)
+    target_language: str = "none"  # Single output language for the meeting (or "none" to skip translation)
     whisper_model: str = DEFAULT_WHISPER_MODEL
     clarification_model: str = DEFAULT_CLARIFICATION_MODEL
     translation_model: str = DEFAULT_TRANSLATION_MODEL
@@ -574,7 +574,7 @@ class SessionStore:
         self,
         title: str = "New Meeting",
         session_type: str = "file",
-        target_language: str = "en",
+        target_language: str = "none",
         whisper_model: str = DEFAULT_WHISPER_MODEL,
         clarification_model: str = DEFAULT_CLARIFICATION_MODEL,
         translation_model: str = DEFAULT_TRANSLATION_MODEL,

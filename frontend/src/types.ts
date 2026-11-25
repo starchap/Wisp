@@ -11,7 +11,17 @@ export interface WhisperModelInfo {
   size_mb: string;
   downloaded?: boolean;
   local_path?: string;
-  language_group?: 'multilingual' | 'da' | string;
+  language_group?: 'multilingual' | 'da' | 'custom' | string;
+  is_custom?: boolean;
+}
+
+export interface LocalUnmanagedModelInfo {
+  folder_name: string;
+  custom_whisper_id?: string;
+  kind: 'custom_stt' | 'legacy' | string;
+  engine?: string;
+  size_mb: string;
+  local_path: string;
 }
 
 export interface ClarificationModelInfo {
@@ -22,6 +32,8 @@ export interface ClarificationModelInfo {
   type: string;
   downloaded?: boolean;
   local_path?: string;
+  language_group?: string;
+  supported_languages?: string;
 }
 
 export interface TranslationModelInfo {
@@ -32,6 +44,24 @@ export interface TranslationModelInfo {
   type: string;
   downloaded?: boolean;
   local_path?: string;
+}
+
+export interface SpeakerDiarizationModelInfo {
+  id: string;
+  name: string;
+  description: string;
+  size_mb: string;
+  type: string;
+  downloaded?: boolean;
+  local_path?: string;
+}
+
+export interface OpusPairStatusInfo {
+  pair: string;
+  repo: string;
+  size_mb: string;
+  downloaded: boolean;
+  local_path: string;
 }
 
 export interface AudioDevice {
@@ -46,6 +76,10 @@ export interface SystemSpecsRecommendation {
   cpu_threads: number;
   total_ram_gb: number;
   avail_ram_gb: number;
+  gpu_name?: string;
+  gpu_detected?: boolean;
+  gpu_provider?: string;
+  gpu_acceleration_enabled?: boolean;
   tier: 'high' | 'balanced' | 'light' | string;
   tier_label: string;
   recommended_multilingual_id: string;
@@ -64,6 +98,10 @@ export interface ModelsStatus {
   whisper_models: WhisperModelInfo[];
   clarification_models?: ClarificationModelInfo[];
   translation_models: TranslationModelInfo[];
+  opus_pairs_status?: Record<string, OpusPairStatusInfo>;
+  local_unmanaged_models?: LocalUnmanagedModelInfo[];
+  active_diarization_model?: string;
+  speaker_diarization_models?: SpeakerDiarizationModelInfo[];
   speaker_diarization: {
     id: string;
     name: string;

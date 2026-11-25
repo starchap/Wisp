@@ -30,7 +30,9 @@ import {
   uploadAudioRecording,
 } from './api';
 import { AudioPlayerBar } from './components/AudioPlayerBar';
+import { EulaGateModal } from './components/EulaGateModal';
 import { HeaderBar } from './components/HeaderBar';
+import { isEulaAccepted, saveEulaAcceptance } from './eulaContent';
 import { LiveAndUploadBar } from './components/LiveAndUploadBar';
 import {
   ExportModal,
@@ -86,7 +88,7 @@ export function App() {
     useState<TranscriptViewMode>(
       () =>
         (localStorage.getItem('wisp_view_mode') as TranscriptViewMode) ||
-        'translated'
+        'original'
     );
   const setTranscriptViewMode = (mode: TranscriptViewMode) => {
     setTranscriptViewModeState(mode);
@@ -109,6 +111,10 @@ export function App() {
     Record<string, boolean>
   >({});
 
+  const [eulaAccepted, setEulaAccepted] = useState<boolean>(() =>
+    isEulaAccepted()
+  );
+  const [isEulaViewerOpen, setIsEulaViewerOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isOnboardingOpen, setIsOnboardingOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('appearance');
@@ -119,7 +125,7 @@ export function App() {
     () => (localStorage.getItem('wisp_theme') as ThemeMode) || 'system'
   );
   const [defaultOutputLang, setDefaultOutputLang] = useState<string>(
-    () => localStorage.getItem('wisp_default_output_lang') || 'en'
+    () => localStorage.getItem('wisp_default_output_lang') || 'none'
   );
 
   const setUiLanguage = (lang: UILanguage) => {
@@ -356,15 +362,11 @@ export function App() {
       initialWhisperModel:
         activeSession?.whisper_model || config?.default_whisper_model || 'small',
       initialClarificationModel:
-        activeSession?.clarification_model ||
-        config?.default_clarification_model ||
-        'whisper-context',
+        config?.default_clarification_model || 'none',
       initialTranslationModel:
-        activeSession?.translation_model ||
-        config?.default_translation_model ||
-        'opus-mt-da-en',
+        config?.default_translation_model || 'none',
       initialTargetLanguage:
-        defaultOutputLang || activeSession?.target_language || 'en',
+        defaultOutputLang || 'none',
       initialSpokenLanguages: activeSession?.spoken_languages || ['da', 'en'],
       hasExistingAudio: false,
     });
@@ -422,20 +424,14 @@ export function App() {
     if (sessionDialog.mode === 'create') {
       const created = await createSession(
         params.title,
-        params.targetLanguage ||
-          defaultOutputLang ||
-          activeSession?.target_language ||
-          'en',
+        params.targetLanguage || defaultOutputLang || 'none',
         params.whisperModel ||
           activeSession?.whisper_model ||
           config?.default_whisper_model ||
-          'tiny',
-        params.translationModel ||
-          activeSession?.translation_model ||
-          config?.default_translation_model ||
-          'opus-mt-da-en',
+          'small',
+        params.translationModel || 'none',
         params.sessionType,
-        params.clarificationModel || 'whisper-context',
+        params.clarificationModel || 'none',
         params.spokenLanguages || []
       );
       setActiveSession(created);
@@ -565,6 +561,14 @@ export function App() {
     <I18nContext.Provider
       value={{ uiLanguage, setUiLanguage, theme, setTheme, t }}
     >
+      {!eulaAccepted ? (
+        <EulaGateModal
+          onAccept={() => {
+            saveEulaAcceptance(uiLanguage);
+            setEulaAccepted(true);
+          }}
+        />
+      ) : (
       <div className="h-screen w-screen flex flex-col bg-slate-950 text-slate-100 overflow-hidden">
         {/* Top Bar */}
         <HeaderBar
@@ -723,6 +727,12 @@ export function App() {
                 fetchSessions().then(setSessionsList).catch(() => {});
               }}
               onOpenEditSession={() => openEditSessionDialog(activeSession)}
+              onOpenModelsSettings={() => {
+                setSettingsTab('models');
+                setIsSettingsOpen(true);
+              }}
+              modelsStatus={modelsStatus}
+              isProcessing={!!uploadProgress}
               onResumeSession={async () => {
                 if (!activeSession) return;
                 const lastEnd = Math.max(
@@ -934,8 +944,17 @@ export function App() {
         }}
         onModelsStatusUpdated={setModelsStatus}
         onOpenOnboardingWizard={() => setIsOnboardingOpen(true)}
+        onOpenEulaViewer={() => setIsEulaViewerOpen(true)}
         onClose={() => setIsSettingsOpen(false)}
       />
+
+      {isEulaViewerOpen && (
+        <EulaGateModal
+          readOnly
+          onAccept={() => setIsEulaViewerOpen(false)}
+          onClose={() => setIsEulaViewerOpen(false)}
+        />
+      )}
 
       <OnboardingWizardModal
         isOpen={isOnboardingOpen}
@@ -989,6 +1008,7 @@ export function App() {
         onClose={() => setMergeModalSourceId(null)}
       />
       </div>
+      )}
     </I18nContext.Provider>
   );
 }

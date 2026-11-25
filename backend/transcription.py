@@ -48,6 +48,88 @@ from session_store import (
 )
 
 
+_NON_SPEECH_BRACKET_RE = re.compile(
+    r"^\s*[\(\[\*♪]+[\s\w\-.,!?/]*[\)\]\*♪]+\s*$", re.IGNORECASE
+)
+
+
+def _has_meaningful_speech_text(text: str) -> bool:
+    """
+    Return True only if `text` contains actual spoken words (letters/digits),
+    rejecting empty strings, pure punctuation/ellipsis/dashes ('…', '–', '—', '...'),
+    invisible whitespace/control chars, and standalone Whisper non-speech tags like
+    '[Musik]', '(Silence)', '♪'.
+    """
+    if not text:
+        return False
+    cleaned = text.strip()
+    if not cleaned:
+        return False
+    # Reject standalone bracketed non-speech tags (e.g. "[Musik]", "(Latter)", "♪ ♪")
+    if _NON_SPEECH_BRACKET_RE.match(cleaned):
+        return False
+    # Must contain at least one letter or digit
+    return any(ch.isalnum() for ch in cleaned)
+
+
+def _detect_and_trim_token_loop(out_ids: List[int]) -> Tuple[List[int], bool]:
+    """
+    Detect greedy Whisper decoder repetition loops of ANY period (1 to 64 tokens)
+    and trim the duplicated tail so long segments never repeat whole sentences.
+    Returns (trimmed_ids, loop_detected).
+    """
+    n = len(out_ids)
+    # 1. Single-token spam (6+ identical tokens in a row)
+    if n >= 6 and len(set(out_ids[-6:])) == 1:
+        return out_ids[:-5], True
+
+    # 2. Short period loops (2-3 tokens repeated 3 times consecutively)
+    for k in (2, 3):
+        if n >= k * 3 and out_ids[-k:] == out_ids[-2 * k : -k] == out_ids[-3 * k : -2 * k]:
+            return out_ids[: -2 * k], True
+
+    # 3. Medium/long phrase loops (4 to 64 tokens repeated twice back-to-back)
+    max_k = min(64, n // 2)
+    for k in range(4, max_k + 1):
+        if out_ids[-k:] == out_ids[-2 * k : -k]:
+            return out_ids[:-k], True
+
+    return out_ids, False
+
+
+def _trim_repeated_sentences(text: str) -> str:
+    """
+    Remove near-identical consecutive/adjacent hallucinated sentence loops
+    (e.g. Whisper repeating a 20-word clause with a 1-word variation).
+    Preserves genuine short interjections like 'Ja. Ja.' or 'Okay. Okay.'.
+    """
+    cleaned = text.strip()
+    if len(cleaned) < 40:
+        return cleaned
+
+    parts = re.split(r"(?<=[.!?…])\s+", cleaned)
+    if len(parts) < 2:
+        return cleaned
+
+    kept: List[str] = []
+    for sent in parts:
+        s_norm = re.sub(r"[^a-zæøå0-9\s]", "", sent.lower()).strip()
+        words = s_norm.split()
+        is_dup = False
+        if len(words) >= 5 and kept:
+            # Check against the last 3 kept sentences for near-verbatim hallucination loops
+            for prev in kept[-3:]:
+                p_norm = re.sub(r"[^a-zæøå0-9\s]", "", prev.lower()).strip()
+                if len(p_norm.split()) >= 5:
+                    if s_norm == p_norm or difflib.SequenceMatcher(None, s_norm, p_norm).ratio() >= 0.82:
+                        is_dup = True
+                        break
+        if not is_dup:
+            kept.append(sent)
+
+    return " ".join(kept).strip()
+
+
 def segment_speech_by_energy(
     audio_16k: np.ndarray,
     min_speech_sec: float = 0.6,
@@ -57,6 +139,8 @@ def segment_speech_by_energy(
     """
     Fast, zero-dependency acoustic Voice Activity Detector (VAD) that splits
     continuous 16kHz audio into natural utterance intervals [(start_sec, end_sec), ...].
+    Uses adaptive 30-second local noise-floor tracking for long recordings so changes in
+    background hum or microphone distance never collapse the entire file into one chunk.
     """
     total_samples = len(audio_16k)
     if total_samples < int(SAMPLE_RATE * 0.25):
@@ -71,11 +155,27 @@ def segment_speech_by_energy(
     frames = audio_16k[: num_frames * win_samples].reshape(num_frames, win_samples)
     rms = np.sqrt(np.mean(frames**2, axis=1))
 
-    noise_floor = float(np.percentile(rms, 15))
-    peak = float(np.percentile(rms, 92))
-    threshold = max(0.004, noise_floor + 0.12 * max(0.005, peak - noise_floor))
+    global_noise = float(np.percentile(rms, 15))
+    global_peak = float(np.percentile(rms, 92))
+    global_thresh = max(0.004, global_noise + 0.12 * max(0.005, global_peak - global_noise))
 
-    is_speech = rms >= threshold
+    # For recordings > 60 seconds, compute adaptive per-30s-window thresholds blended with global
+    frames_per_30s = int(30.0 * 1000 / win_ms)
+    if num_frames > frames_per_30s * 2:
+        thresholds = np.full(num_frames, global_thresh, dtype=np.float32)
+        for w_start in range(0, num_frames, frames_per_30s):
+            w_end = min(num_frames, w_start + frames_per_30s)
+            w_rms = rms[w_start:w_end]
+            if len(w_rms) < 20:
+                continue
+            loc_noise = float(np.percentile(w_rms, 15))
+            loc_peak = float(np.percentile(w_rms, 92))
+            loc_thresh = max(0.004, loc_noise + 0.12 * max(0.005, loc_peak - loc_noise))
+            # Blend 70% local + 30% global so quiet silence stretches don't drop threshold to 0
+            thresholds[w_start:w_end] = max(0.004, 0.70 * loc_thresh + 0.30 * global_thresh)
+        is_speech = rms >= thresholds
+    else:
+        is_speech = rms >= global_thresh
     min_silence_frames = max(1, int(min_silence_sec * 1000 / win_ms))
     min_speech_frames = max(1, int(min_speech_sec * 1000 / win_ms))
     max_seg_frames = max(10, int(max_segment_sec * 1000 / win_ms))
@@ -157,15 +257,13 @@ class OpusPairRunner:
         sess_opts = ort.SessionOptions()
         sess_opts.intra_op_num_threads = max(4, min(12, (os.cpu_count() or 4) - 1))
         sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        self.encoder = ort.InferenceSession(
-            str(model_dir / "onnx" / "encoder_model_quantized.onnx"),
-            sess_options=sess_opts,
-            providers=["CPUExecutionProvider"],
+        self.encoder = app_config.create_ort_session(
+            str(model_dir / "onnx" / "encoder_model_quantized.onnx"), sess_opts
         )
-        self.decoder = ort.InferenceSession(
+        self.decoder = app_config.create_ort_session(
             str(model_dir / "onnx" / "decoder_model_quantized.onnx"),
-            sess_options=sess_opts,
-            providers=["CPUExecutionProvider"],
+            sess_opts,
+            is_autoregressive_decoder=True,
         )
 
     def translate_sentence(self, text: str) -> str:
@@ -277,15 +375,11 @@ class LocalONNXTranslationEngine:
                 self._nllb_tokenizer = Tokenizer.from_file(str(tok_path))
                 sess_opts = ort.SessionOptions()
                 sess_opts.intra_op_num_threads = 4
-                self._nllb_encoder = ort.InferenceSession(
-                    str(enc_path),
-                    sess_options=sess_opts,
-                    providers=["CPUExecutionProvider"],
+                self._nllb_encoder = app_config.create_ort_session(
+                    str(enc_path), sess_opts
                 )
-                self._nllb_decoder = ort.InferenceSession(
-                    str(dec_path),
-                    sess_options=sess_opts,
-                    providers=["CPUExecutionProvider"],
+                self._nllb_decoder = app_config.create_ort_session(
+                    str(dec_path), sess_opts, is_autoregressive_decoder=True
                 )
                 return True
             except Exception as exc:
@@ -549,9 +643,11 @@ class LocalContextClarifierEngine:
     def _validate_structure_preserved(raw_text: str, candidate: str) -> str:
         """
         Strict sentence-structure guardrail for LLM output:
-        Only accepts word-for-word or compound-merge replacements where each modified word
-        is phonetically close to the original word, so the LLM can NEVER rewrite a sentence
-        into something that was not said.
+        - Preserves punctuation (commas, periods, question marks) and capitalization fixes
+          when the underlying words match (`tag == "equal"`).
+        - Only accepts word-for-word or compound-merge replacements where each modified word
+          is phonetically close to the original word, so the LLM can NEVER rewrite a sentence
+          into something that was not said.
         """
         raw_clean = raw_text.strip()
         cand_clean = candidate.strip()
@@ -579,16 +675,19 @@ class LocalContextClarifierEngine:
         if abs(len(cand_words) - len(raw_words)) > max_delta:
             return raw_clean
 
-        # Word-by-word alignment check: only accept spans that are phonetically close (>= 0.72)
+        # Word-by-word alignment check:
+        # - On equal words, keep candidate tokens so comma/period/question-mark/casing fixes are preserved!
+        # - On replaced words, only accept spans that are phonetically close (>= 0.72).
         matcher = difflib.SequenceMatcher(
             None,
-            [w.lower().strip(".,?!:;\"'()-") for w in raw_words],
-            [w.lower().strip(".,?!:;\"'()-") for w in cand_words],
+            [w.lower().strip(".,?!:;\"'()-…–—") for w in raw_words],
+            [w.lower().strip(".,?!:;\"'()-…–—") for w in cand_words],
         )
         safe_words: List[str] = []
         for tag, i1, i2, j1, j2 in matcher.get_opcodes():
             if tag == "equal":
-                safe_words.extend(raw_words[i1:i2])
+                # Preserve LLM punctuation & capitalization improvements on identical words
+                safe_words.extend(cand_words[j1:j2])
             elif tag == "replace":
                 r_span = " ".join(raw_words[i1:i2])
                 c_span = " ".join(cand_words[j1:j2])
@@ -597,7 +696,7 @@ class LocalContextClarifierEngine:
                     LocalContextClarifierEngine._phonetic_key(r_span),
                     LocalContextClarifierEngine._phonetic_key(c_span),
                 ).ratio()
-                if p_sim >= 0.74:
+                if p_sim >= 0.72:
                     safe_words.extend(cand_words[j1:j2])
                 else:
                     safe_words.extend(raw_words[i1:i2])
@@ -605,6 +704,183 @@ class LocalContextClarifierEngine:
                 safe_words.extend(raw_words[i1:i2])
 
         return " ".join(safe_words).strip() or raw_clean
+
+    # Common stopwords excluded when extracting recurring domain keywords across a conversation
+    _STOPWORDS: Dict[str, set] = {
+        "da": {
+            "det", "der", "den", "ikke", "også", "bare", "fordi", "eller", "hvad", "hvor",
+            "hvordan", "hvorfor", "hvornår", "meget", "mange", "noget", "nogen", "nogle",
+            "kunne", "skulle", "ville", "have", "være", "blevet", "bliver", "været", "havde",
+            "sådan", "ligesom", "altså", "faktisk", "egentlig", "rigtig", "virkelig", "måske",
+            "altid", "aldrig", "helt", "selvfølgelig", "sammen", "mellem", "gennem", "under",
+            "over", "efter", "inden", "omkring", "derfor", "dermed", "hvis", "mens", "selvom",
+            "kommer", "komme", "siger", "tænker", "synes", "mener", "bruger", "gøre", "gører",
+            "lave", "laver", "sådan", "ting", "gangen", "gange", "måde", "eksempel", "andre",
+            "anden", "andet", "dette", "disse", "deres", "hendes", "hans", "vores", "jeres",
+            "mine", "dine", "sine", "hver", "alle", "flere", "fleste", "lidt", "mere", "mest",
+        },
+        "en": {
+            "that", "this", "with", "from", "have", "were", "been", "being", "their", "there",
+            "about", "would", "could", "should", "which", "where", "when", "what", "they",
+            "them", "then", "than", "into", "just", "like", "really", "actually", "maybe",
+            "because", "before", "after", "while", "through", "between", "going", "think",
+            "know", "something", "anything", "everything", "people", "other", "another",
+            "these", "those", "very", "more", "most", "some", "many", "much", "also",
+        },
+    }
+
+    @classmethod
+    def _extract_domain_keywords(cls, all_texts: List[str], language: str = "da", top_k: int = 18) -> List[str]:
+        """Extract the most prominent recurring domain words across an entire conversation."""
+        stop = cls._STOPWORDS.get(language, cls._STOPWORDS["en"])
+        counts: Dict[str, int] = {}
+        canonical: Dict[str, str] = {}
+        for txt in all_texts:
+            for tok in re.findall(r"\b[A-Za-zÆØÅæøå][A-Za-zÆØÅæøå0-9\-]{4,}\b", txt):
+                low = tok.lower()
+                if low in stop or len(low) < 5:
+                    continue
+                counts[low] = counts.get(low, 0) + 1
+                # Prefer capitalized version if seen capitalized mid-sentence, otherwise lowercase
+                if low not in canonical:
+                    canonical[low] = tok
+                elif tok[0].islower() and canonical[low][0].isupper():
+                    canonical[low] = tok
+
+        # Keep words that appear at least twice across the conversation (true topic terms)
+        ranked = sorted(
+            ((cnt, low) for low, cnt in counts.items() if cnt >= 2),
+            key=lambda x: (-x[0], -len(x[1]), x[1]),
+        )
+        return [canonical[low] for _, low in ranked[:top_k]]
+
+    @classmethod
+    def _apply_punctuation_and_grammar_fixes(cls, text: str, language: str = "da") -> str:
+        """
+        Clean punctuation, commas, and sentence capitalization without altering any spoken words:
+        - Normalizes spaces around commas/periods/question marks.
+        - Inserts missing Danish commas before clear subordinating/contrasting clauses
+          (e.g. 'fordi', 'selvom', 'hvis', 'mens', 'inden', 'hvilket', 'men').
+        - Capitalizes sentence starts and adds terminal '.' or '?' when missing.
+        """
+        out = text.strip()
+        if not out:
+            return out
+
+        # 1. Normalize spacing around punctuation
+        out = re.sub(r"\s+([,.;:!?])", r"\1", out)
+        out = re.sub(r"([,;!?])([^\s\d\"')\]])", r"\1 \2", out)
+        # Ensure space after period unless part of ellipsis (...) or decimal/abbreviation
+        out = re.sub(r"(?<!\.)\.([A-ZÆØÅa-zæøå])", r". \1", out)
+        out = re.sub(r",{2,}", ",", out)
+        out = re.sub(r"\s{2,}", " ", out).strip()
+
+        # 2. Danish clause comma placement (conservative: only clear subordinating/contrasting conjunctions)
+        if language == "da":
+            no_comma_before = {
+                "og", "eller", "men", "at", "så", "ikke", "kun", "også", "bare",
+                "jo", "vel", "nok", "helt", "lidt", "meget", "ret", "end", "som",
+                "for", "til", "med", "fra", "på", "af", "om", "i", "ved",
+            }
+            sub_conj_single = {
+                "fordi", "selvom", "hvis", "mens", "inden", "eftersom",
+                "hvorefter", "hvorvidt", "hvilket", "hvilken", "hvilke", "men",
+            }
+            words = out.split(" ")
+            if len(words) >= 4:
+                rebuilt: List[str] = [words[0]]
+                words_since_punct = 1
+                for i in range(1, len(words)):
+                    cur = words[i]
+                    cur_low = cur.lower().strip(".,?!:;\"'()")
+                    prev = rebuilt[-1]
+                    prev_clean = prev.lower().strip(".,?!:;\"'()")
+                    prev_has_punct = prev.endswith((",", ".", "?", "!", ":", ";", "–", "-", "…"))
+
+                    if (
+                        cur_low in sub_conj_single
+                        and not prev_has_punct
+                        and words_since_punct >= 2
+                        and prev_clean not in no_comma_before
+                        and i < len(words) - 1
+                    ):
+                        rebuilt[-1] = prev + ","
+                        words_since_punct = 0
+
+                    rebuilt.append(cur)
+                    if cur.endswith((",", ".", "?", "!", ":", ";")):
+                        words_since_punct = 0
+                    else:
+                        words_since_punct += 1
+                out = " ".join(rebuilt)
+
+        # 3. Capitalize start of segment (unless ellipsis) and after sentence-ending punctuation
+        if out and not out.startswith("..."):
+            for idx_c, ch in enumerate(out):
+                if ch.isalpha():
+                    if ch.islower():
+                        out = out[:idx_c] + ch.upper() + out[idx_c + 1 :]
+                    break
+
+        out = re.sub(
+            r"([.!?]\s+)([a-zæøå])",
+            lambda m: m.group(1) + m.group(2).upper(),
+            out,
+        )
+
+        # 4. Ensure terminal punctuation (. or ? for clear questions)
+        if out and out[-1] not in ".?!…":
+            last_sent = re.split(r"[.!?]\s+", out)[-1].strip().lower()
+            is_question = False
+            if language == "da":
+                q_starts = (
+                    "hvordan ", "hvorfor ", "hvad ", "hvem ", "hvornår ", "hvilken ",
+                    "hvilket ", "hvilke ", "kan du ", "kan vi ", "kan man ", "vil du ",
+                    "har du ", "har vi ", "er det ", "er du ", "synes du ", "tænker du ",
+                    "tror du ", "mener du ", "skal vi ", "skal du ", "må jeg ",
+                )
+                is_question = any(last_sent.startswith(q) for q in q_starts)
+            elif language == "en":
+                q_starts = (
+                    "how ", "why ", "what ", "who ", "when ", "where ", "which ",
+                    "can you ", "could you ", "do you ", "did you ", "are you ",
+                    "is it ", "would you ", "have you ", "should we ",
+                )
+                is_question = any(last_sent.startswith(q) for q in q_starts)
+            elif language in ("sv", "no"):
+                q_starts = (
+                    "hur ", "varför ", "vad ", "vem ", "när ", "vilken ", "vilket ",
+                    "hvordan ", "hvorfor ", "hva ", "hvem ", "når ", "hvilken ",
+                    "kan du ", "kan vi ", "vill du ", "vil du ", "har du ", "är det ", "er det ",
+                )
+                is_question = any(last_sent.startswith(q) for q in q_starts)
+            elif language == "de":
+                q_starts = (
+                    "wie ", "warum ", "was ", "wer ", "wann ", "wo ", "welche ", "welcher ",
+                    "kannst du ", "können sie ", "hast du ", "haben sie ", "ist das ", "sind sie ",
+                )
+                is_question = any(last_sent.startswith(q) for q in q_starts)
+            elif language == "es":
+                q_starts = (
+                    "cómo ", "como ", "por qué ", "qué ", "quién ", "cuándo ", "dónde ", "cuál ",
+                    "puedes ", "puede ", "tienes ", "eres ", "es ", "¿",
+                )
+                is_question = any(last_sent.startswith(q) for q in q_starts)
+            elif language == "fr":
+                q_starts = (
+                    "comment ", "pourquoi ", "quoi ", "qui ", "quand ", "où ", "quel ", "quelle ",
+                    "est-ce que ", "pouvez-vous ", "peux-tu ", "avez-vous ", "as-tu ",
+                )
+                is_question = any(last_sent.startswith(q) for q in q_starts)
+            elif language == "it":
+                q_starts = (
+                    "come ", "perché ", "cosa ", "che cosa ", "chi ", "quando ", "dove ", "quale ",
+                    "puoi ", "può ", "hai ", "avete ", "sei ", "è ",
+                )
+                is_question = any(last_sent.startswith(q) for q in q_starts)
+            out += "?" if is_question else "."
+
+        return out
 
     @classmethod
     def _apply_contextual_compound_and_lexicon_fixes(
@@ -718,7 +994,7 @@ class LocalContextClarifierEngine:
                 for pat, repl in aus_fixes:
                     out = re.sub(pat, repl, out)
 
-        # 3. Context-driven proper-noun and cultural anchor matching across the conversation:
+        # 3. Context-driven proper-noun, cultural anchor, and recurring domain-term matching:
         # Collect capitalized terms from the conversation context + cultural anchors for this language
         ctx_terms = set(re.findall(r"\b[A-ZÆØÅ][a-zæøåA-ZÆØÅ0-9\-']{4,}\b", context_summary))
         lang_anchors = cls.CULTURAL_ANCHORS.get(language, {})
@@ -727,27 +1003,112 @@ class LocalContextClarifierEngine:
                 if " " not in item and len(item) >= 5 and not item.lower().endswith("s"):
                     ctx_terms.add(item)
 
-        if ctx_terms:
+        # Also extract explicit Key Domain Terms from the whole-conversation summary
+        # (e.g. 'fysioterapi', 'musklerne', 'genoptræning') so phonetically confused words
+        # like 'musikerne' -> 'musklerne' snap to the conversation's true domain vocabulary.
+        domain_terms: List[str] = []
+        m_dom = re.search(r"Key Domain Terms:\s*([^\n|]+)", context_summary)
+        if m_dom:
+            domain_terms = [
+                t.strip() for t in m_dom.group(1).split(",") if len(t.strip()) >= 6
+            ]
+        domain_lower_set = {t.lower() for t in domain_terms}
+
+        if ctx_terms or domain_terms:
             tokens = out.split()
             for i, tok_w in enumerate(tokens):
                 stripped = tok_w.strip(".,?!:;\"'()[]")
-                if len(stripped) < 5 or stripped.lower().endswith("s"):
+                if len(stripped) < 5:
                     continue
-                for term in ctx_terms:
-                    if stripped.lower() == term.lower() or stripped.lower() == (term.lower() + "s"):
-                        continue
-                    sim = difflib.SequenceMatcher(
-                        None,
-                        cls._phonetic_key(stripped, language),
-                        cls._phonetic_key(term, language),
-                    ).ratio()
-                    raw_sim = difflib.SequenceMatcher(None, stripped.lower(), term.lower()).ratio()
-                    if sim >= 0.86 and raw_sim >= 0.78:
-                        tokens[i] = tok_w.replace(stripped, term)
-                        break
+                low_s = stripped.lower()
+                replaced = False
+
+                # 3a. Proper nouns / cultural anchors
+                if not low_s.endswith("s"):
+                    for term in ctx_terms:
+                        if low_s == term.lower() or low_s == (term.lower() + "s"):
+                            continue
+                        sim = difflib.SequenceMatcher(
+                            None,
+                            cls._phonetic_key(stripped, language),
+                            cls._phonetic_key(term, language),
+                        ).ratio()
+                        raw_sim = difflib.SequenceMatcher(None, low_s, term.lower()).ratio()
+                        if sim >= 0.86 and raw_sim >= 0.78:
+                            tokens[i] = tok_w.replace(stripped, term)
+                            replaced = True
+                            break
+
+                # 3b. Whole-conversation domain homophone disambiguation (e.g. musikerne -> musklerne)
+                if not replaced and domain_terms and len(stripped) >= 6 and low_s not in domain_lower_set:
+                    p_tok = cls._phonetic_key(stripped, language)
+                    best_term = None
+                    best_score = 0.0
+                    for term in domain_terms:
+                        t_low = term.lower()
+                        if low_s == t_low:
+                            continue
+                        # Avoid snapping a word to a simple prefix/inflection of itself (e.g. muskel -> muskler)
+                        if t_low.startswith(low_s) or low_s.startswith(t_low):
+                            continue
+                        p_sim = difflib.SequenceMatcher(
+                            None, p_tok, cls._phonetic_key(term, language)
+                        ).ratio()
+                        raw_sim = difflib.SequenceMatcher(None, low_s, t_low).ratio()
+                        if p_sim >= 0.85 and raw_sim >= 0.80 and p_sim > best_score:
+                            best_score = p_sim
+                            best_term = term
+                    if best_term is not None:
+                        # Preserve the original token's capitalization
+                        if stripped[0].isupper() and best_term[0].islower():
+                            repl_word = best_term[0].upper() + best_term[1:]
+                        elif stripped[0].islower() and best_term[0].isupper():
+                            repl_word = best_term.lower()
+                        else:
+                            repl_word = best_term
+                        tokens[i] = tok_w.replace(stripped, repl_word)
             out = " ".join(tokens)
 
+        # 4. Punctuation, comma & sentence capitalization grammar check
+        out = cls._apply_punctuation_and_grammar_fixes(out, language=language)
         return out
+
+    @staticmethod
+    def _is_llm_clarifier(model_id: str) -> bool:
+        info = next((m for m in CLARIFICATION_MODELS if m["id"] == model_id), None)
+        return bool(info and info.get("type") == "qwen-onnx")
+
+    @staticmethod
+    def _format_chat_prompt(model_id: str, system_prompt: str, user_prompt: str) -> str:
+        info = next((m for m in CLARIFICATION_MODELS if m["id"] == model_id), None)
+        tpl = (info or {}).get("chat_template", "chatml")
+        if tpl == "llama3":
+            return (
+                "<|begin_of_text|>"
+                "<|start_header_id|>system<|end_header_id|>\n\n"
+                f"{system_prompt}<|eot_id|>"
+                "<|start_header_id|>user<|end_header_id|>\n\n"
+                f"{user_prompt}<|eot_id|>"
+                "<|start_header_id|>assistant<|end_header_id|>\n\n"
+            )
+        if tpl == "gemma":
+            return (
+                "<bos><start_of_turn>user\n"
+                f"{system_prompt}\n\n{user_prompt}<end_of_turn>\n"
+                "<start_of_turn>model\n"
+            )
+        if tpl == "phi4":
+            return (
+                f"<|system|>{system_prompt}<|end|>"
+                f"<|user|>{user_prompt}<|end|>"
+                "<|assistant|>"
+            )
+        # Default: ChatML (Qwen2.5, Qwen3, EuroLLM, DanskGPT, SmolLM2)
+        return (
+            f"<|im_start|>system\n{system_prompt}<|im_end|>\n"
+            f"<|im_start|>user\n{user_prompt}<|im_end|>\n"
+            "<|im_start|>assistant\n"
+        )
 
     def _get_qwen_runner(
         self, model_id: str
@@ -767,11 +1128,11 @@ class LocalContextClarifierEngine:
                 tok = Tokenizer.from_file(str(model_dir / "tokenizer.json"))
                 onnx_rel = info.get("onnx_file", "onnx/model_q4.onnx")
                 sess_opts = ort.SessionOptions()
-                sess_opts.intra_op_num_threads = 4
-                sess = ort.InferenceSession(
+                sess_opts.intra_op_num_threads = max(4, min(12, (os.cpu_count() or 4) - 1))
+                sess = app_config.create_ort_session(
                     str(model_dir / onnx_rel),
-                    sess_options=sess_opts,
-                    providers=["CPUExecutionProvider"],
+                    sess_opts,
+                    is_autoregressive_decoder=True,
                 )
                 self._qwen_sessions[model_id] = (sess, tok, info)
                 return self._qwen_sessions[model_id]
@@ -779,69 +1140,77 @@ class LocalContextClarifierEngine:
                 print(f"[ContextClarifier] Warning loading {model_id}: {exc}")
                 return None
 
-    def clarify_with_qwen(
+    def _run_qwen_prompt(
         self,
         model_id: str,
-        raw_text: str,
-        language: str,
-        context_summary: str,
-    ) -> str:
+        prompt: str,
+        max_new_tokens: int = 96,
+        stop_on_newline: bool = True,
+    ) -> Optional[str]:
         runner_tuple = self._get_qwen_runner(model_id)
         if runner_tuple is None:
-            return raw_text
+            return None
         sess, tok, info = runner_tuple
         try:
             num_layers = int(info.get("num_layers", "24"))
             num_kv_heads = int(info.get("num_kv_heads", "2"))
             head_dim = int(info.get("head_dim", "64"))
 
-            prompt = (
-                "<|im_start|>system\n"
-                "You are an ASR speech-to-text word validator. Fix only phonetically misheard words or split compound words "
-                "using the conversation context. Do NOT restructure the sentence, do NOT change word order, and do NOT translate. "
-                "Output ONLY the corrected sentence.<|im_end|>\n"
-                f"<|im_start|>user\nConversation Context ({language}): {context_summary[-360:]}\n"
-                f"Raw Speech-to-Text: {raw_text}\n"
-                "Validated:<|im_end|>\n"
-                "<|im_start|>assistant\n"
-            )
+            sess_inputs = {inp.name: inp for inp in sess.get_inputs()}
+            has_pos_ids = "position_ids" in sess_inputs
+            kv0_inp = sess_inputs.get("past_key_values.0.key")
+            kv_dtype = np.float16 if (kv0_inp and "float16" in kv0_inp.type) else np.float32
+
             ids = tok.encode(prompt, add_special_tokens=False).ids
             seq_len = len(ids)
-            feed = {
+            feed: Dict[str, np.ndarray] = {
                 "input_ids": np.array([ids], dtype=np.int64),
                 "attention_mask": np.ones((1, seq_len), dtype=np.int64),
-                "position_ids": np.arange(seq_len, dtype=np.int64).reshape(1, seq_len),
             }
+            if has_pos_ids:
+                feed["position_ids"] = np.arange(seq_len, dtype=np.int64).reshape(1, seq_len)
             for layer in range(num_layers):
                 feed[f"past_key_values.{layer}.key"] = np.zeros(
-                    (1, num_kv_heads, 0, head_dim), dtype=np.float32
+                    (1, num_kv_heads, 0, head_dim), dtype=kv_dtype
                 )
                 feed[f"past_key_values.{layer}.value"] = np.zeros(
-                    (1, num_kv_heads, 0, head_dim), dtype=np.float32
+                    (1, num_kv_heads, 0, head_dim), dtype=kv_dtype
                 )
 
             outs = sess.run(None, feed)
             logits = outs[0]
             past_kv = outs[1:]
-            im_end_id = tok.token_to_id("<|im_end|>")
-            eos_id = tok.token_to_id("<|endoftext|>")
+            stop_ids = {
+                tid
+                for tid in (
+                    tok.token_to_id("<|im_end|>"),
+                    tok.token_to_id("<|endoftext|>"),
+                    tok.token_to_id("<|eot_id|>"),
+                    tok.token_to_id("<|end_of_text|>"),
+                    tok.token_to_id("<end_of_turn>"),
+                    tok.token_to_id("<|end|>"),
+                    tok.token_to_id("<eos>"),
+                    tok.token_to_id("</s>"),
+                )
+                if tid is not None
+            }
             gen_ids: List[int] = []
             cur_pos = seq_len
             next_tok = int(np.argmax(logits[0, -1]))
-            max_new = min(96, max(20, int(len(raw_text.split()) * 3.2)))
 
-            for _ in range(max_new):
-                if next_tok in (im_end_id, eos_id):
+            for _ in range(max_new_tokens):
+                if next_tok in stop_ids:
                     break
                 gen_ids.append(next_tok)
-                if "\n" in tok.decode(gen_ids):
+                if stop_on_newline and "\n" in tok.decode(gen_ids):
                     break
                 cur_len = cur_pos + 1
                 feed = {
                     "input_ids": np.array([[next_tok]], dtype=np.int64),
                     "attention_mask": np.ones((1, cur_len), dtype=np.int64),
-                    "position_ids": np.array([[cur_pos]], dtype=np.int64),
                 }
+                if has_pos_ids:
+                    feed["position_ids"] = np.array([[cur_pos]], dtype=np.int64)
                 for layer in range(num_layers):
                     feed[f"past_key_values.{layer}.key"] = past_kv[layer * 2]
                     feed[f"past_key_values.{layer}.value"] = past_kv[layer * 2 + 1]
@@ -851,11 +1220,108 @@ class LocalContextClarifierEngine:
                 cur_pos = cur_len
                 next_tok = int(np.argmax(logits[0, -1]))
 
-            candidate = tok.decode(gen_ids).strip()
-            return self._validate_structure_preserved(raw_text, candidate)
+            return tok.decode(gen_ids).strip()
         except Exception as exc:
-            print(f"[ContextClarifier] Qwen error: {exc}")
+            print(f"[ContextClarifier] LLM error ({model_id}): {exc}")
+            return None
+
+    def summarize_conversation_context(
+        self,
+        all_texts: List[str],
+        language: str = "da",
+        clarification_model: str = DEFAULT_CLARIFICATION_MODEL,
+        title: str = "",
+        source_file_name: str = "",
+    ) -> str:
+        """
+        Pre-correction whole-conversation understanding pass:
+        Analyzes the ENTIRE transcript before correcting individual sentences so the
+        clarifier knows the overall topic/domain (e.g. a physiotherapy interview where
+        'musklerne' makes sense instead of phonetically similar 'musikerne').
+        - Always extracts top recurring domain terms across the full transcript (0 MB).
+        - When Qwen2.5 is active, generates a concise 2-sentence global topic summary
+          from beginning + middle + end excerpts of the conversation.
+        """
+        clean_texts = [t.strip() for t in all_texts if t and t.strip()]
+        if not clean_texts:
+            return ""
+
+        parts: List[str] = []
+        if title and not title.lower().startswith(("new meeting", "untitled", "sales meeting")):
+            parts.append(f"Title: {title}.")
+        if source_file_name:
+            clean_fname = re.sub(r"\.[^/.]+$", "", source_file_name).replace("_", " ").replace("-", " ")
+            if clean_fname and clean_fname.lower() not in (title or "").lower():
+                parts.append(f"File: {clean_fname}.")
+
+        domain_keywords = self._extract_domain_keywords(clean_texts, language=language, top_k=18)
+
+        # If a local ONNX LLM clarifier is selected, generate a concise whole-conversation topic summary ONCE
+        if self._is_llm_clarifier(clarification_model):
+            joined_full = " ".join(clean_texts)
+            if len(joined_full) <= 1400:
+                excerpt = joined_full
+            else:
+                n_s = len(clean_texts)
+                # Sample beginning, middle, and end so the summary covers the whole conversation
+                b_txt = " ".join(clean_texts[: max(2, n_s // 6)])[:480]
+                m_start = max(0, n_s // 2 - max(1, n_s // 12))
+                m_txt = " ".join(clean_texts[m_start : m_start + max(2, n_s // 6)])[:460]
+                e_txt = " ".join(clean_texts[-max(2, n_s // 6) :])[:460]
+                excerpt = f"{b_txt} [...] {m_txt} [...] {e_txt}"
+
+            sum_prompt = self._format_chat_prompt(
+                clarification_model,
+                "Summarize the overall topic, domain/profession, and key subject terminology of this transcript "
+                "in 2 concise sentences. Output ONLY the summary.",
+                f"Transcript ({language}): {excerpt}\nTopic Summary:",
+            )
+            qwen_sum = self._run_qwen_prompt(
+                clarification_model, sum_prompt, max_new_tokens=90, stop_on_newline=False
+            )
+            if qwen_sum:
+                qwen_sum_clean = re.sub(r"\s+", " ", qwen_sum).strip()[:360]
+                parts.append(f"Overall Topic Summary: {qwen_sum_clean}")
+
+        if domain_keywords:
+            parts.append("Key Domain Terms: " + ", ".join(domain_keywords))
+
+        return " | ".join(parts).strip()
+
+    def clarify_with_qwen(
+        self,
+        model_id: str,
+        raw_text: str,
+        language: str,
+        context_summary: str,
+        global_summary: str = "",
+    ) -> str:
+        topic_block = (
+            f"Whole-Conversation Overview: {global_summary[:420]}\n"
+            if global_summary
+            else ""
+        )
+        prompt = self._format_chat_prompt(
+            model_id,
+            "You are an ASR speech-to-text validator and punctuation editor. "
+            "Using the whole-conversation topic and local context: "
+            "1) Fix phonetically misheard words or domain homophones (e.g. 'musikerne' -> 'musklerne' in a physiotherapy context) and split compound words. "
+            "2) Fix commas, periods, question marks, and sentence capitalization for natural grammar in the spoken language. "
+            "Do NOT rewrite the sentence, do NOT add or remove words, do NOT change word order, and do NOT translate. "
+            "Output ONLY the corrected sentence.",
+            f"{topic_block}Local Context ({language}): {context_summary[-340:]}\n"
+            f"Raw Speech-to-Text: {raw_text}\n"
+            "Validated:",
+        )
+        candidate = self._run_qwen_prompt(
+            model_id,
+            prompt,
+            max_new_tokens=min(112, max(24, int(len(raw_text.split()) * 3.2))),
+            stop_on_newline=True,
+        )
+        if not candidate:
             return raw_text
+        return self._validate_structure_preserved(raw_text, candidate)
 
     def clarify_segment(
         self,
@@ -865,37 +1331,42 @@ class LocalContextClarifierEngine:
         clarification_model: str = DEFAULT_CLARIFICATION_MODEL,
         whisper_ctx_candidate: Optional[str] = None,
         speaker_context: str = "",
+        global_summary: str = "",
     ) -> str:
         """
         Validate and clarify a single transcribed segment sentence-by-sentence using
-        conversation context, speaker persona/history, and cultural/national context
-        WITHOUT restructuring any sentence.
+        the whole-conversation topic summary, local conversation context, speaker persona/history,
+        and punctuation/grammar rules WITHOUT restructuring any sentence.
         """
         if not raw_text or clarification_model == "none":
             return raw_text
 
         working = raw_text.strip()
+        full_ctx = f"{global_summary} {context_summary}".strip()
+
         # 1. If Whisper contextual second-pass candidate (`sot_prev`) is provided, merge only high-confidence word fixes
         if whisper_ctx_candidate and whisper_ctx_candidate.strip() != working:
             working = self._merge_acoustic_context_candidate(
-                working, whisper_ctx_candidate, f"{context_summary} {speaker_context}"
+                working, whisper_ctx_candidate, f"{full_ctx} {speaker_context}"
             )
 
-        # 2. Apply sentence-by-sentence contextual & cultural compound-word validation
+        # 2. Apply sentence-by-sentence contextual, domain-term, compound-word & punctuation validation
         working = self._apply_contextual_compound_and_lexicon_fixes(
-            working, language, context_summary, speaker_context=speaker_context
+            working, language, full_ctx, speaker_context=speaker_context
         )
 
-        # 3. If user selected a local Qwen2.5 ONNX context clarifier model, run it with strict phonetic structure guardrails
-        if clarification_model in ("qwen2.5-0.5b", "qwen2.5-1.5b"):
+        # 3. If user selected a local ONNX LLM context clarifier model, run it with whole-conversation summary
+        #    and strict phonetic + punctuation-preserving structure guardrails
+        if self._is_llm_clarifier(clarification_model):
             working = self.clarify_with_qwen(
                 clarification_model,
                 working,
                 language,
                 f"{context_summary}\nSpeaker profile: {speaker_context}".strip(),
+                global_summary=global_summary,
             )
             working = self._apply_contextual_compound_and_lexicon_fixes(
-                working, language, context_summary, speaker_context=speaker_context
+                working, language, full_ctx, speaker_context=speaker_context
             )
 
         return working
@@ -996,18 +1467,14 @@ class WhisperONNXRunner:
             engine_str = str(paths.get("engine", ""))
             self.is_hf_onnx = engine_str == "hf-whisper-onnx"
             self.is_wav2vec2_onnx = engine_str == "wav2vec2-onnx"
-            self.encoder = ort.InferenceSession(
-                str(paths["encoder"]),
-                sess_options=sess_opts,
-                providers=["CPUExecutionProvider"],
+            self.encoder = app_config.create_ort_session(
+                str(paths["encoder"]), sess_opts
             )
             if self.is_wav2vec2_onnx:
                 self.decoder = None
             else:
-                self.decoder = ort.InferenceSession(
-                    str(paths["decoder"]),
-                    sess_options=sess_opts,
-                    providers=["CPUExecutionProvider"],
+                self.decoder = app_config.create_ort_session(
+                    str(paths["decoder"]), sess_opts, is_autoregressive_decoder=True
                 )
         except Exception as load_err:
             print(f"[WhisperONNXRunner] Failed loading '{model_id}' ({load_err}); attempting fallback model...")
@@ -1020,18 +1487,14 @@ class WhisperONNXRunner:
                     engine_str = str(paths.get("engine", ""))
                     self.is_hf_onnx = engine_str == "hf-whisper-onnx"
                     self.is_wav2vec2_onnx = engine_str == "wav2vec2-onnx"
-                    self.encoder = ort.InferenceSession(
-                        str(paths["encoder"]),
-                        sess_options=sess_opts,
-                        providers=["CPUExecutionProvider"],
+                    self.encoder = app_config.create_ort_session(
+                        str(paths["encoder"]), sess_opts
                     )
                     if self.is_wav2vec2_onnx:
                         self.decoder = None
                     else:
-                        self.decoder = ort.InferenceSession(
-                            str(paths["decoder"]),
-                            sess_options=sess_opts,
-                            providers=["CPUExecutionProvider"],
+                        self.decoder = app_config.create_ort_session(
+                            str(paths["decoder"]), sess_opts, is_autoregressive_decoder=True
                         )
                     self.model_id = candidate_id
                     fallback_loaded = True
@@ -1169,10 +1632,12 @@ class WhisperONNXRunner:
         allowed_languages: Optional[List[str]] = None,
     ) -> str:
         if self.is_hf_onnx or self.is_wav2vec2_onnx:
-            # Hviske v2 and Røst 315M are specialized Danish ASR models
+            # Specialized single-language ONNX ASR models (Hviske/Røst=da, KB=sv, NB=no, Distil=en, DE/ES/FR/IT)
             if allowed_languages and len(allowed_languages) == 1:
                 return allowed_languages[0]
-            return "da"
+            info = next((m for m in app_config.WHISPER_MODELS if m["id"] == self.model_id), None)
+            lg = info.get("language_group", "da") if info else "da"
+            return lg if lg not in ("multilingual", "custom", "") else "da"
         if not self.is_multilingual or len(self.lang_tokens_arr) == 0:
             return "en"
         valid_allowed = [
@@ -1273,11 +1738,8 @@ class WhisperONNXRunner:
                     break
                 if next_tok < self.eot:
                     out_ids.append(next_tok)
-                if len(out_ids) >= 6 and len(set(out_ids[-6:])) == 1:
-                    out_ids = out_ids[:-5]
-                    break
-                if len(out_ids) >= 8 and out_ids[-4:] == out_ids[-8:-4]:
-                    out_ids = out_ids[:-4]
+                out_ids, looped = _detect_and_trim_token_loop(out_ids)
+                if looped:
                     break
                 step_feed = {
                     "input_ids": np.array([[next_tok]], dtype=np.int64),
@@ -1296,7 +1758,11 @@ class WhisperONNXRunner:
                     dec_kv[l] = (presents[l * 4], presents[l * 4 + 1])
                 next_tok = int(np.argmax(logits[0, -1]))
 
-            text_out = self.hf_tokenizer.decode(out_ids, skip_special_tokens=True).strip()
+            text_out = _trim_repeated_sentences(
+                self.hf_tokenizer.decode(out_ids, skip_special_tokens=True).strip()
+            )
+            if not _has_meaningful_speech_text(text_out):
+                return ""
             if text_out and text_out[0].islower():
                 text_out = text_out[0].upper() + text_out[1:]
             if text_out and text_out[-1] not in ".?!…":
@@ -1344,11 +1810,8 @@ class WhisperONNXRunner:
                 break
             if next_tok < self.eot:
                 out_ids.append(next_tok)
-            if len(out_ids) >= 6 and len(set(out_ids[-6:])) == 1:
-                out_ids = out_ids[:-5]
-                break
-            if len(out_ids) >= 8 and out_ids[-4:] == out_ids[-8:-4]:
-                out_ids = out_ids[:-4]
+            out_ids, looped = _detect_and_trim_token_loop(out_ids)
+            if looped:
                 break
 
             logits, self_k, self_v = self.decoder.run(
@@ -1366,7 +1829,8 @@ class WhisperONNXRunner:
             next_tok = int(np.argmax(logits[0, -1]))
 
         raw_bytes = b"".join(self.tokens_map.get(t, b"") for t in out_ids)
-        return raw_bytes.decode("utf-8", errors="replace").strip()
+        text_out = _trim_repeated_sentences(raw_bytes.decode("utf-8", errors="replace").strip())
+        return text_out if _has_meaningful_speech_text(text_out) else ""
 
 
 class LocalSpeechPipeline:
@@ -1677,7 +2141,7 @@ class LocalSpeechPipeline:
                 )
             )
 
-            if not orig_text or not orig_text.strip(" ()[].,-?!\"'"):
+            if not _has_meaningful_speech_text(orig_text):
                 continue
 
             if not forced_speaker_id:
@@ -1726,7 +2190,7 @@ class LocalSpeechPipeline:
 
         if progress_cb:
             progress_cb("Detecting speech segments across recording...", 28)
-        max_seg_len = 20.0 if total_audio_sec > 300.0 else 14.0
+        max_seg_len = 14.0
         seg_times = segment_speech_by_energy(
             audio_16k, min_speech_sec=0.5, max_segment_sec=max_seg_len, min_silence_sec=0.4
         )
@@ -1744,11 +2208,16 @@ class LocalSpeechPipeline:
         speaker_ids, centroids = self.diarizer.cluster_segments_batch(
             audio_16k, seg_times, num_speakers=num_speakers
         )
+        # Post-clustering centroid refinement: split any remaining longer segments (>= 5s)
+        # where the voice switches cleanly between two discovered speaker centroids.
+        seg_times, speaker_ids = self.diarizer.refine_segments_with_centroids(
+            audio_16k, seg_times, speaker_ids, centroids
+        )
 
         # Optimization for long recordings (> 4 minutes, e.g. 1-2 hour MP4 meetings):
-        # Since Whisper's ONNX encoder always computes a fixed 30.0-second window ([1, n_mels, 3000]),
-        # merging consecutive short utterances by the SAME speaker (with gap <= 1.6s, up to 22.0s)
-        # cuts Whisper encoder runs by 3x-4x while giving Whisper full sentences for higher accuracy!
+        # Merge consecutive short utterances by the SAME speaker with a brief pause (<= 0.9s)
+        # up to 15.0s so Whisper gets complete sentences without crossing speaker pauses
+        # or entering 20-30s hallucination/repetition territory.
         if total_audio_sec > 240.0 and len(seg_times) > 1:
             merged_times: List[Tuple[float, float]] = []
             merged_spks: List[str] = []
@@ -1757,8 +2226,8 @@ class LocalSpeechPipeline:
             for (nxt_s, nxt_e), nxt_spk in zip(seg_times[1:], speaker_ids[1:]):
                 if (
                     nxt_spk == cur_spk
-                    and (nxt_s - cur_e) <= 1.6
-                    and (nxt_e - cur_s) <= 22.0
+                    and (nxt_s - cur_e) <= 0.9
+                    and (nxt_e - cur_s) <= 15.0
                 ):
                     cur_e = nxt_e
                 else:
@@ -1807,20 +2276,26 @@ class LocalSpeechPipeline:
             conv_ctx, spk_ctx = self._build_conversation_context(
                 session, current_speaker_id=spk_id
             )
+            # Defer Qwen LLM clarification to Pass 2 (after whole-conversation topic summary is built)
+            pass1_clarif = (
+                "whisper-context"
+                if session.clarification_model in ("qwen2.5-0.5b", "qwen2.5-1.5b")
+                else session.clarification_model
+            )
             detected_lang, orig_text, trans_text, conf, raw_stt_text = (
                 self.transcribe_and_translate_clip(
                     clip,
                     forced_language=forced_lang,
                     target_language=session.target_language,
                     model_id=session.whisper_model,
-                    clarification_model=session.clarification_model,
+                    clarification_model=pass1_clarif,
                     translation_model=session.translation_model,
                     allowed_languages=session.spoken_languages,
                     conversation_context=conv_ctx,
                     speaker_context=spk_ctx,
                 )
             )
-            if not orig_text or not orig_text.strip(" ()[].,-?!\"'"):
+            if not _has_meaningful_speech_text(orig_text):
                 continue
 
             self.store.ensure_speaker(session, spk_id)
@@ -1848,39 +2323,88 @@ class LocalSpeechPipeline:
                 if on_partial_update:
                     on_partial_update(session)
 
-        # Second-Pass Global & Speaker-Aware Clarification across the full recording:
-        # Now that we know what the entire interview is about and how each speaker speaks,
-        # validate every segment against the full conversation & speaker context before saving.
-        if session.clarification_model and session.clarification_model != "none":
-            for idx, seg in enumerate(session.segments):
-                full_conv_ctx, full_spk_ctx = self._build_conversation_context(
-                    session, up_to_seg_index=idx, current_speaker_id=seg.speaker_id
-                )
-                seg.original_text = self.clarifier._apply_contextual_compound_and_lexicon_fixes(
-                    seg.original_text,
-                    seg.source_language,
-                    full_conv_ctx,
-                    speaker_context=full_spk_ctx,
-                )
-                if (
-                    not session.target_language
-                    or session.target_language == "none"
-                    or session.translation_model == "none"
-                    or seg.source_language == session.target_language
-                ):
-                    seg.translated_text = seg.original_text
-                elif session.translation_model != "whisper-native":
-                    seg.translated_text = self.translator.translate(
-                        seg.original_text,
-                        source_lang=seg.source_language,
-                        target_lang=session.target_language,
-                        translation_model=session.translation_model,
-                    )
+        # Second-Pass Whole-Conversation Summary + Global Grammar & Context Clarification:
+        # First summarize what the entire conversation is about (domain, topic, key terms),
+        # then validate every segment's domain vocabulary, commas, periods & capitalization.
+        self._run_global_clarification_pass(session, progress_cb=progress_cb)
 
         self.store.save_session(session)
         if progress_cb:
             progress_cb("Completed!", 100)
         return session
+
+    def _run_global_clarification_pass(
+        self,
+        session: MeetingSession,
+        progress_cb: Optional[Callable[[str, int], None]] = None,
+    ) -> None:
+        """
+        Whole-conversation pre-summary + 2nd-pass global clarification:
+        1. Summarizes the entire transcript into a compact topic/domain overview + key terms
+           (e.g. physiotherapy -> 'musklerne' instead of 'musikerne').
+        2. Clarifies each segment's raw text using the global summary, surrounding before/after
+           context, speaker profile, and punctuation/comma grammar rules.
+        3. Updates translations if a target language is active.
+        """
+        if not session.segments or not session.clarification_model or session.clarification_model == "none":
+            return
+
+        if progress_cb:
+            progress_cb("Summarizing full conversation topic & refining grammar...", 97)
+
+        all_raw_texts = [
+            (s.raw_text or s.original_text or "").strip()
+            for s in session.segments
+            if (s.raw_text or s.original_text or "").strip()
+        ]
+        # Primary spoken language across segments
+        lang_counts: Dict[str, int] = {}
+        for s in session.segments:
+            if s.source_language:
+                lang_counts[s.source_language] = lang_counts.get(s.source_language, 0) + 1
+        primary_lang = max(lang_counts, key=lambda k: lang_counts[k]) if lang_counts else "da"
+
+        global_summary = self.clarifier.summarize_conversation_context(
+            all_raw_texts,
+            language=primary_lang,
+            clarification_model=session.clarification_model,
+            title=session.title,
+            source_file_name=session.source_file_name,
+        )
+
+        for idx, seg in enumerate(session.segments):
+            base_raw = (seg.raw_text or seg.original_text or "").strip()
+            if not base_raw:
+                continue
+            if not seg.raw_text:
+                seg.raw_text = base_raw
+
+            full_conv_ctx, full_spk_ctx = self._build_conversation_context(
+                session, up_to_seg_index=idx, current_speaker_id=seg.speaker_id
+            )
+            seg.original_text = self.clarifier.clarify_segment(
+                raw_text=base_raw,
+                language=seg.source_language,
+                context_summary=full_conv_ctx,
+                clarification_model=session.clarification_model,
+                whisper_ctx_candidate=None,
+                speaker_context=full_spk_ctx,
+                global_summary=global_summary,
+            )
+            if (
+                not session.target_language
+                or session.target_language == "none"
+                or session.translation_model == "none"
+                or seg.source_language == session.target_language
+            ):
+                seg.translated_text = seg.original_text
+            elif session.translation_model != "whisper-native":
+                seg.translated_text = self.translator.translate(
+                    seg.original_text,
+                    source_lang=seg.source_language,
+                    target_lang=session.target_language,
+                    translation_model=session.translation_model,
+                )
 
     def reprocess_speaker_segments(
         self, session: MeetingSession, speaker_id: str
@@ -1933,9 +2457,37 @@ class LocalSpeechPipeline:
         """
         When the user changes the 3rd Model (`clarification_model`) on an existing session
         (e.g. toggling between 'whisper-context', 'qwen2.5-0.5b', or 'none' Skip Clarification),
-        re-run Context Clarification on each segment's `raw_text` using the full conversation,
-        speaker profile, and cultural context, and re-translate into `session.target_language`.
+        first summarize the whole conversation topic/domain, then re-run Context Clarification
+        & punctuation/grammar checks on each segment's `raw_text`, and re-translate.
         """
+        if session.clarification_model == "none":
+            for seg in session.segments:
+                base_raw = (seg.raw_text or seg.original_text or "").strip()
+                if base_raw:
+                    if not seg.raw_text:
+                        seg.raw_text = base_raw
+                    seg.original_text = base_raw
+            return self.retranslate_all_segments(session)
+
+        all_raw_texts = [
+            (s.raw_text or s.original_text or "").strip()
+            for s in session.segments
+            if (s.raw_text or s.original_text or "").strip()
+        ]
+        lang_counts: Dict[str, int] = {}
+        for s in session.segments:
+            if s.source_language:
+                lang_counts[s.source_language] = lang_counts.get(s.source_language, 0) + 1
+        primary_lang = max(lang_counts, key=lambda k: lang_counts[k]) if lang_counts else "da"
+
+        global_summary = self.clarifier.summarize_conversation_context(
+            all_raw_texts,
+            language=primary_lang,
+            clarification_model=session.clarification_model,
+            title=session.title,
+            source_file_name=session.source_file_name,
+        )
+
         for idx, seg in enumerate(session.segments):
             base_raw = (seg.raw_text or seg.original_text or "").strip()
             if not base_raw:
@@ -1943,20 +2495,18 @@ class LocalSpeechPipeline:
             if not seg.raw_text:
                 seg.raw_text = base_raw
 
-            if session.clarification_model == "none":
-                seg.original_text = base_raw
-            else:
-                conv_ctx, spk_ctx = self._build_conversation_context(
-                    session, up_to_seg_index=idx, current_speaker_id=seg.speaker_id
-                )
-                seg.original_text = self.clarifier.clarify_segment(
-                    raw_text=base_raw,
-                    language=seg.source_language,
-                    context_summary=conv_ctx,
-                    clarification_model=session.clarification_model,
-                    whisper_ctx_candidate=None,
-                    speaker_context=spk_ctx,
-                )
+            conv_ctx, spk_ctx = self._build_conversation_context(
+                session, up_to_seg_index=idx, current_speaker_id=seg.speaker_id
+            )
+            seg.original_text = self.clarifier.clarify_segment(
+                raw_text=base_raw,
+                language=seg.source_language,
+                context_summary=conv_ctx,
+                clarification_model=session.clarification_model,
+                whisper_ctx_candidate=None,
+                speaker_context=spk_ctx,
+                global_summary=global_summary,
+            )
 
         return self.retranslate_all_segments(session)
 
@@ -2037,65 +2587,68 @@ class LocalSpeechPipeline:
             )
         self._get_whisper_runner(session.whisper_model)
 
+        # Build the list of (start_sec, end_sec, speaker_id) work items without ever
+        # pre-populating empty TranscriptSegment shells into `session.segments` (which
+        # previously caused empty "Speaker 1: / Speaker 2:" rows in the UI).
+        work_items: List[Tuple[float, float, str]] = [
+            (seg.start, seg.end, seg.speaker_id) for seg in session.segments
+        ]
+
         # If the full session recording is on disk and this is a file session,
-        # check if any long segment (>= 3.6s) contains an unsplit intra-segment speaker change
+        # check if any longer segment contains an unsplit intra-segment speaker change
         # and split + reassign speaker IDs using existing session voice centroids.
         if session.session_type == "file" and audio_path.exists() and session.embeddings:
             full_audio_16k = self.store.read_audio_slice(
                 session.id, 0.0, max(1.0, session.duration or 3600.0)
             )
             if len(full_audio_16k) > int(SAMPLE_RATE * 1.0):
-                cur_times = [(seg.start, seg.end) for seg in session.segments]
+                cur_times = [(s, e) for s, e, _ in work_items]
                 refined_times = self.diarizer.split_segments_on_speaker_change(
                     full_audio_16k, cur_times
                 )
-                if len(refined_times) != len(cur_times):
-                    new_segments: List[TranscriptSegment] = []
-                    centroids_np = {
-                        spk_id: np.array(vec, dtype=np.float32)
-                        for spk_id, vec in session.embeddings.items()
-                    }
-                    for s_sec, e_sec in refined_times:
-                        clip = full_audio_16k[
-                            int(s_sec * SAMPLE_RATE) : int(e_sec * SAMPLE_RATE)
-                        ]
-                        emb = self.diarizer.extract_embedding(clip)
-                        best_spk = "speaker_1"
-                        best_sim = -2.0
-                        if emb is not None and centroids_np:
-                            for spk_id, c_vec in centroids_np.items():
-                                if c_vec.shape == emb.shape:
-                                    sim = float(
-                                        np.dot(emb, c_vec)
-                                        / max(
-                                            1e-8,
-                                            float(
-                                                np.linalg.norm(emb)
-                                                * np.linalg.norm(c_vec)
-                                            ),
-                                        )
+                centroids_np = {
+                    spk_id: np.array(vec, dtype=np.float32)
+                    for spk_id, vec in session.embeddings.items()
+                }
+                refined_spks: List[str] = []
+                for s_sec, e_sec in refined_times:
+                    clip = full_audio_16k[
+                        int(s_sec * SAMPLE_RATE) : int(e_sec * SAMPLE_RATE)
+                    ]
+                    emb = self.diarizer.extract_embedding(clip)
+                    best_spk = "speaker_1"
+                    best_sim = -2.0
+                    if emb is not None and centroids_np:
+                        for spk_id, c_vec in centroids_np.items():
+                            if c_vec.shape == emb.shape:
+                                sim = float(
+                                    np.dot(emb, c_vec)
+                                    / max(
+                                        1e-8,
+                                        float(
+                                            np.linalg.norm(emb)
+                                            * np.linalg.norm(c_vec)
+                                        ),
                                     )
-                                    if sim > best_sim:
-                                        best_sim = sim
-                                        best_spk = spk_id
-                        new_segments.append(
-                            TranscriptSegment(
-                                id=uuid.uuid4().hex[:10],
-                                speaker_id=best_spk,
-                                start=round(s_sec, 2),
-                                end=round(e_sec, 2),
-                                source_language="da",
-                                original_text="",
-                                translated_text="",
-                                target_language=session.target_language,
-                            )
-                        )
-                    session.segments = new_segments
+                                )
+                                if sim > best_sim:
+                                    best_sim = sim
+                                    best_spk = spk_id
+                    refined_spks.append(best_spk)
 
-        total = len(session.segments)
+                refined_times, refined_spks = self.diarizer.refine_segments_with_centroids(
+                    full_audio_16k, refined_times, refined_spks, session.embeddings
+                )
+                work_items = [
+                    (round(s_sec, 2), round(e_sec, 2), spk_id)
+                    for (s_sec, e_sec), spk_id in zip(refined_times, refined_spks)
+                ]
+
+        session.segments = []
+        total = len(work_items)
         t_start = time.time()
         last_partial_push = time.time()
-        for idx, seg in enumerate(session.segments):
+        for idx, (s_sec, e_sec, spk_id) in enumerate(work_items):
             if progress_cb:
                 pct = 15 + int(80 * (idx + 1) / max(1, total))
                 eta_suffix = ""
@@ -2112,16 +2665,21 @@ class LocalSpeechPipeline:
                     pct,
                 )
 
-            clip = self.store.read_audio_slice(session.id, seg.start, seg.end)
+            clip = self.store.read_audio_slice(session.id, s_sec, e_sec)
             if len(clip) < int(SAMPLE_RATE * 0.25):
                 continue
 
-            spk = session.speakers.get(seg.speaker_id)
+            spk = session.speakers.get(spk_id)
             forced_lang = (
                 spk.language if (spk and spk.language != "auto") else None
             )
             conv_ctx, spk_ctx = self._build_conversation_context(
-                session, up_to_seg_index=idx, current_speaker_id=seg.speaker_id
+                session, current_speaker_id=spk_id
+            )
+            pass1_clarif = (
+                "whisper-context"
+                if session.clarification_model in ("qwen2.5-0.5b", "qwen2.5-1.5b")
+                else session.clarification_model
             )
             detected_lang, orig_text, trans_text, conf, raw_stt_text = (
                 self.transcribe_and_translate_clip(
@@ -2129,53 +2687,40 @@ class LocalSpeechPipeline:
                     forced_language=forced_lang,
                     target_language=session.target_language,
                     model_id=session.whisper_model,
-                    clarification_model=session.clarification_model,
+                    clarification_model=pass1_clarif,
                     translation_model=session.translation_model,
                     allowed_languages=session.spoken_languages,
                     conversation_context=conv_ctx,
                     speaker_context=spk_ctx,
                 )
             )
-            if orig_text:
-                seg.source_language = detected_lang
-                seg.original_text = orig_text
-                seg.translated_text = trans_text
-                seg.target_language = session.target_language
-                seg.confidence = round(conf, 3)
-                seg.raw_text = raw_stt_text
+            if not _has_meaningful_speech_text(orig_text):
+                continue
+
+            self.store.ensure_speaker(session, spk_id)
+            session.segments.append(
+                TranscriptSegment(
+                    id=uuid.uuid4().hex[:10],
+                    speaker_id=spk_id,
+                    start=round(s_sec, 2),
+                    end=round(e_sec, 2),
+                    source_language=detected_lang,
+                    original_text=orig_text,
+                    translated_text=trans_text,
+                    target_language=session.target_language,
+                    confidence=round(conf, 3),
+                    raw_text=raw_stt_text,
+                )
+            )
 
             now_ts = time.time()
-            if ((idx + 1) % 5 == 0) or (now_ts - last_partial_push >= 8.0):
+            if (len(session.segments) % 5 == 0) or (now_ts - last_partial_push >= 8.0):
                 last_partial_push = now_ts
                 self.store.save_session(session)
                 if on_partial_update:
                     on_partial_update(session)
 
-        if session.clarification_model and session.clarification_model != "none":
-            for idx, seg in enumerate(session.segments):
-                full_conv_ctx, full_spk_ctx = self._build_conversation_context(
-                    session, up_to_seg_index=idx, current_speaker_id=seg.speaker_id
-                )
-                seg.original_text = self.clarifier._apply_contextual_compound_and_lexicon_fixes(
-                    seg.original_text,
-                    seg.source_language,
-                    full_conv_ctx,
-                    speaker_context=full_spk_ctx,
-                )
-                if (
-                    not session.target_language
-                    or session.target_language == "none"
-                    or session.translation_model == "none"
-                    or seg.source_language == session.target_language
-                ):
-                    seg.translated_text = seg.original_text
-                elif session.translation_model != "whisper-native":
-                    seg.translated_text = self.translator.translate(
-                        seg.original_text,
-                        source_lang=seg.source_language,
-                        target_lang=session.target_language,
-                        translation_model=session.translation_model,
-                    )
+        self._run_global_clarification_pass(session, progress_cb=progress_cb)
 
         self.store.save_session(session)
         if progress_cb:
@@ -2210,7 +2755,7 @@ class LocalSpeechPipeline:
         self._get_whisper_runner(session.whisper_model)
 
         rem_dur = len(rem_audio) / float(SAMPLE_RATE)
-        max_seg_len = 20.0 if (last_end + rem_dur) > 300.0 else 14.0
+        max_seg_len = 14.0
         rel_times = segment_speech_by_energy(
             rem_audio, min_speech_sec=0.5, max_segment_sec=max_seg_len, min_silence_sec=0.4
         )
@@ -2220,15 +2765,20 @@ class LocalSpeechPipeline:
         rel_times = self.diarizer.split_segments_on_speaker_change(rem_audio, rel_times)
 
         # Match remaining segments against existing session speaker voiceprints (or online assignment)
-        seg_times: List[Tuple[float, float]] = []
-        speaker_ids: List[str] = []
+        rel_spks: List[str] = []
         for rs, re_t in rel_times:
             clip = rem_audio[int(rs * SAMPLE_RATE) : int(re_t * SAMPLE_RATE)]
             spk_id, session.embeddings = self.diarizer.assign_speaker_online(
                 clip, session.embeddings
             )
-            seg_times.append((last_end + rs, last_end + re_t))
-            speaker_ids.append(spk_id)
+            rel_spks.append(spk_id)
+
+        rel_times, speaker_ids = self.diarizer.refine_segments_with_centroids(
+            rem_audio, rel_times, rel_spks, session.embeddings
+        )
+        seg_times: List[Tuple[float, float]] = [
+            (last_end + rs, last_end + re_t) for rs, re_t in rel_times
+        ]
 
         if (last_end + rem_dur) > 240.0 and len(seg_times) > 1:
             merged_times: List[Tuple[float, float]] = []
@@ -2238,8 +2788,8 @@ class LocalSpeechPipeline:
             for (nxt_s, nxt_e), nxt_spk in zip(seg_times[1:], speaker_ids[1:]):
                 if (
                     nxt_spk == cur_spk
-                    and (nxt_s - cur_e) <= 1.6
-                    and (nxt_e - cur_s) <= 22.0
+                    and (nxt_s - cur_e) <= 0.9
+                    and (nxt_e - cur_s) <= 15.0
                 ):
                     cur_e = nxt_e
                 else:
@@ -2282,20 +2832,25 @@ class LocalSpeechPipeline:
             conv_ctx, spk_ctx = self._build_conversation_context(
                 session, current_speaker_id=spk_id
             )
+            pass1_clarif = (
+                "whisper-context"
+                if session.clarification_model in ("qwen2.5-0.5b", "qwen2.5-1.5b")
+                else session.clarification_model
+            )
             detected_lang, orig_text, trans_text, conf, raw_stt_text = (
                 self.transcribe_and_translate_clip(
                     clip,
                     forced_language=forced_lang,
                     target_language=session.target_language,
                     model_id=session.whisper_model,
-                    clarification_model=session.clarification_model,
+                    clarification_model=pass1_clarif,
                     translation_model=session.translation_model,
                     allowed_languages=session.spoken_languages,
                     conversation_context=conv_ctx,
                     speaker_context=spk_ctx,
                 )
             )
-            if not orig_text or not orig_text.strip(" ()[].,-?!\"'"):
+            if not _has_meaningful_speech_text(orig_text):
                 continue
 
             self.store.ensure_speaker(session, spk_id)
@@ -2320,15 +2875,25 @@ class LocalSpeechPipeline:
                 if on_partial_update:
                     on_partial_update(session)
 
+        self._run_global_clarification_pass(session, progress_cb=progress_cb)
+
         self.store.save_session(session)
         if progress_cb:
             progress_cb("Completed!", 100)
         return session
 
     def evict_model_cache(self, model_type: str, model_id: str = "") -> None:
-        """Release ONNX Runtime sessions from memory before deleting model files on disk."""
+        """Release ONNX Runtime sessions from memory before deleting model files or switching GPU/CPU."""
         with self._lock:
-            if model_type == "whisper":
+            if model_type == "all":
+                self._whisper_runners.clear()
+                self.clarifier._qwen_sessions.clear()
+                self.translator._opus_cache.clear()
+                self.translator._nllb_encoder = None
+                self.translator._nllb_decoder = None
+                self.translator._nllb_tokenizer = None
+                self.diarizer._extractor = None
+            elif model_type == "whisper":
                 self._whisper_runners.pop(model_id, None)
             elif model_type == "clarification":
                 if model_id:

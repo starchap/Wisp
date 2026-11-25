@@ -7,19 +7,23 @@ import {
   FolderOpen,
   Headphones,
   Languages,
+  Loader2,
   Mic,
   Play,
   Radio,
   RefreshCw,
+  Settings,
+  Sparkles,
   Square,
   X,
 } from 'lucide-react';
-import { openSessionAudioFolder, updateTurnText } from '../api';
+import { openSessionAudioFolder, updateSession, updateTurnText } from '../api';
 import { useI18n } from '../i18n';
 import {
   AudioDevice,
   LiveState,
   MeetingSession,
+  ModelsStatus,
   SupportedLanguage,
   TranscriptSegment,
 } from '../types';
@@ -35,8 +39,11 @@ interface TranscriptFeedProps {
   onPlaySegment: (segment: TranscriptSegment) => void;
   onSessionUpdated?: (updated: MeetingSession) => void;
   onOpenEditSession?: () => void;
+  onOpenModelsSettings?: () => void;
+  modelsStatus?: ModelsStatus | null;
   onReprocessSession?: () => void;
   onResumeSession?: () => void;
+  isProcessing?: boolean;
   devices?: {
     microphones: AudioDevice[];
     loopbacks: AudioDevice[];
@@ -67,21 +74,58 @@ interface GroupedTurn {
   translatedParagraph: string;
 }
 
+function hasVisibleSpeech(text: string): boolean {
+  const cleaned = text.trim();
+  if (!cleaned) return false;
+  // Require at least one letter or digit (Unicode-aware so Danish æøå etc. match)
+  return /[\p{L}\p{N}]/u.test(cleaned);
+}
+
+function joinParagraphChunk(existing: string, next: string, pauseBreak: boolean): string {
+  if (!existing) return next;
+  if (!next) return existing;
+  return pauseBreak ? `${existing}\n\n${next}` : `${existing} ${next}`;
+}
+
 function groupConsecutiveTurns(session: MeetingSession): GroupedTurn[] {
   const turns: GroupedTurn[] = [];
   for (const seg of session.segments) {
-    const spk = session.speakers[seg.speaker_id];
-    const spkName = spk ? spk.name : seg.speaker_id;
-    const spkColor = spk ? spk.color : '#3B82F6';
     const rawText = (seg.raw_text || seg.original_text || '').trim();
     const corrText = (seg.original_text || rawText).trim();
     const transText = (seg.translated_text || corrText).trim();
+
+    // Never emit empty or punctuation-only speaker blocks (and don't let them split a turn)
+    if (
+      !hasVisibleSpeech(rawText) &&
+      !hasVisibleSpeech(corrText) &&
+      !hasVisibleSpeech(transText)
+    ) {
+      continue;
+    }
+
+    const spk = session.speakers[seg.speaker_id];
+    const spkName = spk ? spk.name : seg.speaker_id;
+    const spkColor = spk ? spk.color : '#3B82F6';
     const prev = turns[turns.length - 1];
     if (prev && prev.speakerId === seg.speaker_id) {
+      const prevEnd = prev.segments[prev.segments.length - 1]?.end ?? seg.start;
+      const pauseBreak = seg.start - prevEnd >= 2.5;
       prev.segments.push(seg);
-      prev.rawOriginalParagraph = `${prev.rawOriginalParagraph} ${rawText}`.trim();
-      prev.correctedParagraph = `${prev.correctedParagraph} ${corrText}`.trim();
-      prev.translatedParagraph = `${prev.translatedParagraph} ${transText}`.trim();
+      prev.rawOriginalParagraph = joinParagraphChunk(
+        prev.rawOriginalParagraph,
+        rawText,
+        pauseBreak
+      );
+      prev.correctedParagraph = joinParagraphChunk(
+        prev.correctedParagraph,
+        corrText,
+        pauseBreak
+      );
+      prev.translatedParagraph = joinParagraphChunk(
+        prev.translatedParagraph,
+        transText,
+        pauseBreak
+      );
     } else {
       turns.push({
         speakerId: seg.speaker_id,
@@ -111,8 +155,10 @@ export function buildWordCopyText(
           : viewMode === 'corrected'
           ? t.correctedParagraph
           : t.translatedParagraph;
+      if (!hasVisibleSpeech(body)) return '';
       return `${t.speakerName}:\n${body}`;
     })
+    .filter(Boolean)
     .join('\n\n\n');
 }
 
@@ -125,8 +171,11 @@ export const TranscriptFeed: React.FC<TranscriptFeedProps> = ({
   onPlaySegment,
   onSessionUpdated,
   onOpenEditSession,
+  onOpenModelsSettings,
+  modelsStatus,
   onReprocessSession,
   onResumeSession,
+  isProcessing = false,
   devices = { microphones: [], loopbacks: [] },
   selectedLoopback = '',
   selectedMic = '',
@@ -142,6 +191,73 @@ export const TranscriptFeed: React.FC<TranscriptFeedProps> = ({
   const [editingText, setEditingText] = useState<string>('');
   const [editingSpeakerId, setEditingSpeakerId] = useState<string>('');
   const [isSavingEdit, setIsSavingEdit] = useState(false);
+
+  // On-demand Correction / Translation empty-state controls
+  const availableClarifiers = (modelsStatus?.clarification_models || []).filter(
+    (m) => m.id !== 'none' && m.downloaded
+  );
+  const availableTranslators = (modelsStatus?.translation_models || []).filter(
+    (m) => m.id !== 'none' && m.id !== 'whisper-native' && m.downloaded
+  );
+  const targetLanguageOptions = languages.filter(
+    (l) => l.code !== 'auto' && l.code !== 'none'
+  );
+  const [quickClarifier, setQuickClarifier] = useState<string>(
+    availableClarifiers[0]?.id || 'whisper-context'
+  );
+  const [quickTranslator, setQuickTranslator] = useState<string>(
+    availableTranslators[0]?.id || 'opus-mt-da-en'
+  );
+  const [quickTargetLang, setQuickTargetLang] = useState<string>('en');
+  const [isRunningOnDemand, setIsRunningOnDemand] = useState<
+    'clarify' | 'translate' | null
+  >(null);
+  const [onDemandError, setOnDemandError] = useState<string | null>(null);
+
+  const isClarificationSkipped =
+    !session.clarification_model || session.clarification_model === 'none';
+
+  const handleRunOnDemandClarification = async () => {
+    if (isRunningOnDemand) return;
+    setIsRunningOnDemand('clarify');
+    setOnDemandError(null);
+    try {
+      const modelToUse =
+        availableClarifiers.some((m) => m.id === quickClarifier)
+          ? quickClarifier
+          : availableClarifiers[0]?.id || 'whisper-context';
+      const updated = await updateSession(session.id, {
+        clarification_model: modelToUse,
+      });
+      onSessionUpdated?.(updated);
+    } catch (err: any) {
+      setOnDemandError(err?.message || 'Failed to run correction.');
+    } finally {
+      setIsRunningOnDemand(null);
+    }
+  };
+
+  const handleRunOnDemandTranslation = async () => {
+    if (isRunningOnDemand) return;
+    setIsRunningOnDemand('translate');
+    setOnDemandError(null);
+    try {
+      const modelToUse =
+        availableTranslators.some((m) => m.id === quickTranslator)
+          ? quickTranslator
+          : availableTranslators[0]?.id || 'opus-mt-da-en';
+      const updated = await updateSession(session.id, {
+        translation_model: modelToUse,
+        target_language: quickTargetLang || 'en',
+        retranslate_existing: true,
+      });
+      onSessionUpdated?.(updated);
+    } catch (err: any) {
+      setOnDemandError(err?.message || 'Failed to run translation.');
+    } finally {
+      setIsRunningOnDemand(null);
+    }
+  };
 
   const speakersList = Object.values(session.speakers).sort((a, b) => {
     const numA = parseInt(a.id.replace('speaker_', ''), 10) || 999;
@@ -288,7 +404,12 @@ export const TranscriptFeed: React.FC<TranscriptFeedProps> = ({
               session.segments.length > 0 &&
               session.duration > 30 &&
               maxEnd < session.duration - 20;
-            if (!isPartiallyTranscribed || !onResumeSession || isRecording) {
+            if (
+              !isPartiallyTranscribed ||
+              !onResumeSession ||
+              isRecording ||
+              isProcessing
+            ) {
               return null;
             }
             const pctDone = Math.min(
@@ -314,7 +435,8 @@ export const TranscriptFeed: React.FC<TranscriptFeedProps> = ({
             session.duration > 0 ||
             !!session.source_file_name) &&
             onReprocessSession &&
-            !isRecording && (
+            !isRecording &&
+            !isProcessing && (
               <button
                 type="button"
                 onClick={onReprocessSession}
@@ -538,6 +660,192 @@ export const TranscriptFeed: React.FC<TranscriptFeedProps> = ({
               </div>
             )}
           </div>
+        ) : viewMode === 'corrected' && isClarificationSkipped ? (
+          <div className="h-full flex flex-col items-center justify-center text-center max-w-lg mx-auto py-12 select-none">
+            <div className="w-full rounded-2xl border border-slate-800 bg-slate-900/60 p-8 flex flex-col items-center shadow-xl">
+              <div className="w-12 h-12 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center mb-4 text-amber-400">
+                <Sparkles className="w-6 h-6" />
+              </div>
+              <h3 className="text-base font-bold text-white mb-1.5">
+                Correction was skipped for this session
+              </h3>
+              <p className="text-xs text-slate-400 leading-relaxed mb-5 max-w-sm">
+                Run local AI context clarification directly on the existing transcript (no re-transcription needed) to fix misheard words, spelling, and punctuation.
+              </p>
+
+              <div className="w-full max-w-sm space-y-3 text-left">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                    Clarification Model
+                  </label>
+                  <select
+                    value={
+                      availableClarifiers.some((m) => m.id === quickClarifier)
+                        ? quickClarifier
+                        : availableClarifiers[0]?.id || 'whisper-context'
+                    }
+                    onChange={(e) => setQuickClarifier(e.target.value)}
+                    disabled={!!isRunningOnDemand}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-200 focus:outline-none focus:border-amber-500"
+                  >
+                    {availableClarifiers.length > 0 ? (
+                      availableClarifiers.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.name}
+                        </option>
+                      ))
+                    ) : (
+                      <option value="whisper-context">
+                        Whisper Contextual Acoustic Validator (0 MB extra)
+                      </option>
+                    )}
+                  </select>
+                </div>
+
+                {onDemandError && (
+                  <p className="text-[11px] text-rose-400">{onDemandError}</p>
+                )}
+
+                <div className="flex items-center justify-center gap-2.5 pt-2">
+                  <button
+                    type="button"
+                    onClick={handleRunOnDemandClarification}
+                    disabled={!!isRunningOnDemand}
+                    className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-60 text-white text-xs font-semibold shadow-lg shadow-amber-600/20 transition"
+                  >
+                    {isRunningOnDemand === 'clarify' ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Sparkles className="w-3.5 h-3.5" />
+                    )}
+                    <span>
+                      {isRunningOnDemand === 'clarify'
+                        ? 'Running Correction...'
+                        : 'Run Correction'}
+                    </span>
+                  </button>
+                  {onOpenModelsSettings && (
+                    <button
+                      type="button"
+                      onClick={onOpenModelsSettings}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition"
+                    >
+                      <Settings className="w-3.5 h-3.5" />
+                      <span>Models</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : viewMode === 'translated' && isTranslationSkipped ? (
+          <div className="h-full flex flex-col items-center justify-center text-center max-w-lg mx-auto py-12 select-none">
+            <div className="w-full rounded-2xl border border-slate-800 bg-slate-900/60 p-8 flex flex-col items-center shadow-xl">
+              <div className="w-12 h-12 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center mb-4 text-emerald-400">
+                <Languages className="w-6 h-6" />
+              </div>
+              <h3 className="text-base font-bold text-white mb-1.5">
+                Translation was skipped for this session
+              </h3>
+              <p className="text-xs text-slate-400 leading-relaxed mb-5 max-w-sm">
+                Translate the existing transcript locally into your chosen language without re-transcribing the audio.
+              </p>
+
+              {availableTranslators.length === 0 ? (
+                <div className="space-y-3">
+                  <p className="text-xs text-amber-300">
+                    No local translation model is downloaded yet.
+                  </p>
+                  {onOpenModelsSettings && (
+                    <button
+                      type="button"
+                      onClick={onOpenModelsSettings}
+                      className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-lg shadow-emerald-600/20 transition"
+                    >
+                      <Settings className="w-3.5 h-3.5" />
+                      <span>Download Translation Model</span>
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <div className="w-full max-w-sm space-y-3 text-left">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                      Output Language
+                    </label>
+                    <select
+                      value={quickTargetLang}
+                      onChange={(e) => setQuickTargetLang(e.target.value)}
+                      disabled={!!isRunningOnDemand}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+                    >
+                      {targetLanguageOptions.map((l) => (
+                        <option key={l.code} value={l.code}>
+                          {l.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                      Translation Model
+                    </label>
+                    <select
+                      value={
+                        availableTranslators.some((m) => m.id === quickTranslator)
+                          ? quickTranslator
+                          : availableTranslators[0]?.id || 'opus-mt-da-en'
+                      }
+                      onChange={(e) => setQuickTranslator(e.target.value)}
+                      disabled={!!isRunningOnDemand}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+                    >
+                      {availableTranslators.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {onDemandError && (
+                    <p className="text-[11px] text-rose-400">{onDemandError}</p>
+                  )}
+
+                  <div className="flex items-center justify-center gap-2.5 pt-2">
+                    <button
+                      type="button"
+                      onClick={handleRunOnDemandTranslation}
+                      disabled={!!isRunningOnDemand}
+                      className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 text-white text-xs font-semibold shadow-lg shadow-emerald-600/20 transition"
+                    >
+                      {isRunningOnDemand === 'translate' ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Languages className="w-3.5 h-3.5" />
+                      )}
+                      <span>
+                        {isRunningOnDemand === 'translate'
+                          ? 'Translating...'
+                          : 'Run Translation'}
+                      </span>
+                    </button>
+                    {onOpenModelsSettings && (
+                      <button
+                        type="button"
+                        onClick={onOpenModelsSettings}
+                        className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition"
+                      >
+                        <Settings className="w-3.5 h-3.5" />
+                        <span>Models</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
         ) : (
           /* PLAIN TEXT DOCUMENT VIEW: Directly selectable & copy-pasteable into Word */
           <div className="max-w-4xl mx-auto rounded-2xl bg-slate-900/80 border border-slate-800 p-8 shadow-xl select-text space-y-7">
@@ -555,15 +863,19 @@ export const TranscriptFeed: React.FC<TranscriptFeedProps> = ({
               const isEditingThisTurn =
                 editingTurnId === turn.firstSegment.id;
 
+              if (!hasVisibleSpeech(paragraphText) && !isEditingThisTurn) {
+                return null;
+              }
+
               return (
                 <div
                   key={`${turn.firstSegment.id}-${idx}`}
-                  className={`group rounded-xl transition ${
+                  className={`group rounded-xl transition-colors border ${
                     isEditingThisTurn
-                      ? 'bg-slate-800/90 border border-blue-500/60 -mx-3 px-4 py-3 shadow-lg'
+                      ? 'bg-slate-800/90 border-blue-500/60 -mx-3 px-4 py-3 shadow-lg'
                       : isTurnPlaying
-                      ? 'bg-blue-950/30 -mx-3 px-3 py-2'
-                      : 'hover:bg-slate-800/40 -mx-3 px-3 py-1.5'
+                      ? 'bg-blue-950/30 border-transparent -mx-3 px-3 py-1.5'
+                      : 'border-transparent hover:bg-slate-800/40 -mx-3 px-3 py-1.5'
                   }`}
                 >
                   <div className="flex items-center justify-between gap-2 mb-1">

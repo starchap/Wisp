@@ -42,12 +42,15 @@ export async function triggerModelDownload(
     | 'speaker'
     | 'clarification'
     | 'opus'
+    | 'opus_pair'
     | 'nllb'
     | 'all_recommended'
     | 'onboarding',
   whisperId?: string,
   translationId?: string,
-  clarificationId?: string
+  clarificationId?: string,
+  speakerId?: string,
+  opusPairs?: string[]
 ): Promise<void> {
   const res = await fetch(`${API_BASE}/api/models/download`, {
     method: 'POST',
@@ -57,9 +60,35 @@ export async function triggerModelDownload(
       whisper_id: whisperId,
       clarification_id: clarificationId,
       translation_id: translationId,
+      speaker_id: speakerId,
+      opus_pairs: opusPairs,
     }),
   });
   if (!res.ok) throw new Error('Failed to start model download');
+}
+
+export async function updateDiarizationModel(
+  modelId: string
+): Promise<ModelsStatus> {
+  const res = await fetch(`${API_BASE}/api/settings/diarization`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model_id: modelId }),
+  });
+  if (!res.ok) throw new Error('Failed to update active diarization model');
+  return res.json();
+}
+
+export async function updateGpuAcceleration(
+  enabled: boolean
+): Promise<ModelsStatus> {
+  const res = await fetch(`${API_BASE}/api/settings/gpu`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!res.ok) throw new Error('Failed to update GPU acceleration setting');
+  return res.json();
 }
 
 export async function deleteLocalModel(
@@ -68,8 +97,10 @@ export async function deleteLocalModel(
     | 'speaker'
     | 'clarification'
     | 'opus'
+    | 'opus_pair'
     | 'nllb'
-    | 'translation',
+    | 'translation'
+    | 'custom',
   modelId?: string
 ): Promise<ModelsStatus> {
   const res = await fetch(`${API_BASE}/api/models/delete`, {
@@ -85,7 +116,7 @@ export async function deleteLocalModel(
     throw new Error(err.detail || 'Failed to delete model');
   }
   const data = await res.json();
-  return data.models_status;
+  return data.models_status || data;
 }
 
 export async function reprocessSessionAudio(sessionId: string): Promise<void> {

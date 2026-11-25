@@ -341,3 +341,90 @@ html.theme-light select option {
   background-color: #ffffff !important;
   color: #0f172a !important;
 }
+
+/* ============================================================================
+   WELCOME SCREEN ANIMATIONS (Playful, Tactile, Nintendo-Inspired Motion)
+   ============================================================================ */
+@keyframes wisp-pop-in {
+  0% {
+    opacity: 0;
+    transform: translateY(14px) scale(0.95);
+  }
+  70% {
+    opacity: 1;
+    transform: translateY(-2px) scale(1.01);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes wisp-float {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+@keyframes wisp-wave-bar {
+  0%, 100% {
+    transform: scaleY(0.32);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes wisp-joy-left {
+  0% {
+    opacity: 0;
+    transform: translateY(-16px);
+  }
+  65% {
+    opacity: 1;
+    transform: translateY(2px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes wisp-joy-right {
+  0% {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  65% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-wisp-pop {
+  animation: wisp-pop-in 0.48s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.animate-wisp-float {
+  animation: wisp-float 3.2s ease-in-out infinite;
+}
+
+.animate-wisp-wave {
+  transform-origin: bottom;
+  animation: wisp-wave-bar 1.15s ease-in-out infinite;
+}
+
+.animate-wisp-joy-left {
+  animation: wisp-joy-left 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.animate-wisp-joy-right {
+  animation: wisp-joy-right 0.55s cubic-bezier(0.22, 1, 0.36, 1) 0.1s both;
+}
