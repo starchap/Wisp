@@ -325,10 +325,13 @@ def _trigger_session_reprocess_async(session_id: str) -> None:
     def _worker():
         try:
             pipeline.retranscribe_and_translate_all_segments(
-                session, progress_cb=_progress
+                session,
+                progress_cb=_progress,
+                on_partial_update=lambda s: broadcast_event("session_updated", s.to_dict()),
             )
             broadcast_event("session_updated", session.to_dict())
         except Exception as exc:
+            broadcast_event("session_updated", session.to_dict())
             broadcast_event(
                 "upload_progress",
                 {
@@ -400,6 +403,43 @@ def api_reprocess_session(session_id: str):
         raise HTTPException(status_code=404, detail="Session not found")
     _trigger_session_reprocess_async(session_id)
     return {"status": "reprocessing", "session_id": session_id}
+
+
+@app.post("/api/sessions/{session_id}/resume")
+def api_resume_session(session_id: str):
+    """Resume a partially transcribed recording from the end of the last saved segment."""
+    session = store.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    def _progress(msg: str, pct: int):
+        broadcast_event(
+            "upload_progress",
+            {"session_id": session_id, "message": msg, "percent": pct},
+        )
+
+    def _worker():
+        try:
+            pipeline.resume_incomplete_transcription(
+                session,
+                progress_cb=_progress,
+                on_partial_update=lambda s: broadcast_event("session_updated", s.to_dict()),
+            )
+            broadcast_event("session_updated", session.to_dict())
+        except Exception as exc:
+            broadcast_event("session_updated", session.to_dict())
+            broadcast_event(
+                "upload_progress",
+                {
+                    "session_id": session_id,
+                    "message": f"Resume error: {exc}",
+                    "percent": 100,
+                    "error": str(exc),
+                },
+            )
+
+    threading.Thread(target=_worker, daemon=True).start()
+    return {"status": "resuming", "session_id": session_id}
 
 
 @app.get("/api/sessions/{session_id}/audio")

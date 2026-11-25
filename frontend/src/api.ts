@@ -413,3 +413,12 @@ export async function openSessionAudioFolder(sessionId: string): Promise<void> {
     throw new Error('Could not open session folder');
   }
 }
+
+export async function resumeSessionAudio(sessionId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/resume`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    throw new Error('Failed to resume transcription');
+  }
+}

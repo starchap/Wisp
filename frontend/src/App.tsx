@@ -22,6 +22,7 @@ import {
   getSessionAudioUrl,
   mergeSpeakers,
   reprocessSessionAudio,
+  resumeSessionAudio,
   startLiveCapture,
   stopLiveCapture,
   updateSession,
@@ -69,6 +70,9 @@ export function App() {
   const activeSessionIdRef = useRef<string | null>(null);
   useEffect(() => {
     activeSessionIdRef.current = activeSession?.id || null;
+    if (activeSession?.id) {
+      localStorage.setItem('wisp_active_session_id', activeSession.id);
+    }
   }, [activeSession?.id]);
   const [liveState, setLiveState] = useState<LiveState>({
     is_recording: false,
@@ -78,8 +82,16 @@ export function App() {
     rms_level: 0,
   });
 
-  const [transcriptViewMode, setTranscriptViewMode] =
-    useState<TranscriptViewMode>('translated');
+  const [transcriptViewMode, setTranscriptViewModeState] =
+    useState<TranscriptViewMode>(
+      () =>
+        (localStorage.getItem('wisp_view_mode') as TranscriptViewMode) ||
+        'translated'
+    );
+  const setTranscriptViewMode = (mode: TranscriptViewMode) => {
+    setTranscriptViewModeState(mode);
+    localStorage.setItem('wisp_view_mode', mode);
+  };
   const [activeSegmentId, setActiveSegmentId] = useState<string | null>(null);
   const [seekTarget, setSeekTarget] = useState<{
     time: number;
@@ -212,7 +224,10 @@ export function App() {
         setSessionsList(list);
 
         if (list.length > 0) {
-          const first = await fetchSession(list[0].id);
+          const savedId = localStorage.getItem('wisp_active_session_id');
+          const targetSummary =
+            (savedId && list.find((s) => s.id === savedId)) || list[0];
+          const first = await fetchSession(targetSummary.id);
           if (mounted) setActiveSession((prev) => prev || first);
         } else {
           if (mounted) setActiveSession(null);
@@ -704,6 +719,25 @@ export function App() {
               onChangeViewMode={setTranscriptViewMode}
               onPlaySegment={handlePlaySegment}
               onOpenEditSession={() => openEditSessionDialog(activeSession)}
+              onResumeSession={async () => {
+                if (!activeSession) return;
+                const lastEnd = Math.max(
+                  0,
+                  ...activeSession.segments.map((s) => s.end)
+                );
+                setUploadProgress({
+                  message: `Resuming transcription from ${Math.floor(lastEnd / 60)}:${String(Math.floor(lastEnd % 60)).padStart(2, '0')} (${activeSession.whisper_model})...`,
+                  percent: 15,
+                });
+                try {
+                  await resumeSessionAudio(activeSession.id);
+                } catch (err: any) {
+                  setErrorBanner(
+                    err?.message || 'Failed to resume session transcription'
+                  );
+                  setUploadProgress(null);
+                }
+              }}
               onReprocessSession={async () => {
                 if (!activeSession) return;
                 setUploadProgress({

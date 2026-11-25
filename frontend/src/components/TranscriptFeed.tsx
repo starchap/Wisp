@@ -34,6 +34,7 @@ interface TranscriptFeedProps {
   onPlaySegment: (segment: TranscriptSegment) => void;
   onOpenEditSession?: () => void;
   onReprocessSession?: () => void;
+  onResumeSession?: () => void;
   devices?: {
     microphones: AudioDevice[];
     loopbacks: AudioDevice[];
@@ -122,6 +123,7 @@ export const TranscriptFeed: React.FC<TranscriptFeedProps> = ({
   onPlaySegment,
   onOpenEditSession,
   onReprocessSession,
+  onResumeSession,
   devices = { microphones: [], loopbacks: [] },
   selectedLoopback = '',
   selectedMic = '',
@@ -239,6 +241,37 @@ export const TranscriptFeed: React.FC<TranscriptFeedProps> = ({
               )}
             </button>
           )}
+
+          {(() => {
+            const maxEnd =
+              session.segments.length > 0
+                ? Math.max(...session.segments.map((s) => s.end))
+                : 0;
+            const isPartiallyTranscribed =
+              session.segments.length > 0 &&
+              session.duration > 30 &&
+              maxEnd < session.duration - 20;
+            if (!isPartiallyTranscribed || !onResumeSession || isRecording) {
+              return null;
+            }
+            const pctDone = Math.min(
+              99,
+              Math.max(1, Math.round((maxEnd / session.duration) * 100))
+            );
+            return (
+              <button
+                type="button"
+                onClick={onResumeSession}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-sm transition"
+                title="Continue transcribing the remaining audio from where it stopped"
+              >
+                <Play className="w-3.5 h-3.5 fill-current" />
+                <span>
+                  Resume from {formatTime(maxEnd)} ({pctDone}%)
+                </span>
+              </button>
+            );
+          })()}
 
           {(session.segments.length > 0 ||
             session.duration > 0 ||

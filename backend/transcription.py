@@ -2008,6 +2008,7 @@ class LocalSpeechPipeline:
         self,
         session: MeetingSession,
         progress_cb: Optional[Callable[[str, int], None]] = None,
+        on_partial_update: Optional[Callable[[MeetingSession], None]] = None,
     ) -> MeetingSession:
         """
         Re-transcribe, clarify, and re-translate all existing segments of a session using
@@ -2018,11 +2019,14 @@ class LocalSpeechPipeline:
         audio_path = self.store.get_audio_path(session.id)
         if not session.segments and audio_path.exists():
             audio_16k = self.store.read_audio_slice(
-                session.id, 0.0, max(1.0, session.duration or 3600.0)
+                session.id, 0.0, max(1.0, session.duration or 14400.0)
             )
             if len(audio_16k) > 0:
                 return self.process_uploaded_file(
-                    session, audio_16k, progress_cb=progress_cb
+                    session,
+                    audio_16k,
+                    progress_cb=progress_cb,
+                    on_partial_update=on_partial_update,
                 )
             return session
 
@@ -2089,11 +2093,22 @@ class LocalSpeechPipeline:
                     session.segments = new_segments
 
         total = len(session.segments)
+        t_start = time.time()
+        last_partial_push = time.time()
         for idx, seg in enumerate(session.segments):
             if progress_cb:
                 pct = 15 + int(80 * (idx + 1) / max(1, total))
+                eta_suffix = ""
+                if idx >= 2:
+                    elapsed = time.time() - t_start
+                    avg_per_seg = elapsed / float(idx)
+                    rem_sec = int(max(0.0, avg_per_seg * (total - idx)))
+                    if rem_sec >= 60:
+                        eta_suffix = f" (~{rem_sec // 60}m {rem_sec % 60:02d}s remaining)"
+                    elif rem_sec > 2:
+                        eta_suffix = f" (~{rem_sec}s remaining)"
                 progress_cb(
-                    f"Re-transcribing, clarifying & translating segment {idx + 1}/{total} ({session.whisper_model})...",
+                    f"Re-transcribing, clarifying & translating segment {idx + 1}/{total} ({session.whisper_model}){eta_suffix}...",
                     pct,
                 )
 
@@ -2129,6 +2144,13 @@ class LocalSpeechPipeline:
                 seg.confidence = round(conf, 3)
                 seg.raw_text = raw_stt_text
 
+            now_ts = time.time()
+            if ((idx + 1) % 5 == 0) or (now_ts - last_partial_push >= 8.0):
+                last_partial_push = now_ts
+                self.store.save_session(session)
+                if on_partial_update:
+                    on_partial_update(session)
+
         if session.clarification_model and session.clarification_model != "none":
             for idx, seg in enumerate(session.segments):
                 full_conv_ctx, full_spk_ctx = self._build_conversation_context(
@@ -2158,6 +2180,149 @@ class LocalSpeechPipeline:
         self.store.save_session(session)
         if progress_cb:
             progress_cb("Completed re-transcription, clarification & translation!", 100)
+        return session
+
+    def resume_incomplete_transcription(
+        self,
+        session: MeetingSession,
+        progress_cb: Optional[Callable[[str, int], None]] = None,
+        on_partial_update: Optional[Callable[[MeetingSession], None]] = None,
+    ) -> MeetingSession:
+        """
+        Resume a partially transcribed recording from the end timestamp of the last saved segment
+        up to `session.duration`, preserving all existing segments and speaker identities.
+        """
+        audio_path = self.store.get_audio_path(session.id)
+        if not audio_path.exists():
+            return session
+
+        last_end = max((s.end for s in session.segments), default=0.0)
+        full_dur = max(session.duration or 0.0, last_end + 1.0)
+        rem_audio = self.store.read_audio_slice(session.id, last_end, full_dur + 3600.0)
+        if len(rem_audio) < int(SAMPLE_RATE * 1.0):
+            return session
+
+        if progress_cb:
+            progress_cb(
+                f"Resuming transcription from {int(last_end // 60):02d}:{int(last_end % 60):02d} ({session.whisper_model})...",
+                15,
+            )
+        self._get_whisper_runner(session.whisper_model)
+
+        rem_dur = len(rem_audio) / float(SAMPLE_RATE)
+        max_seg_len = 20.0 if (last_end + rem_dur) > 300.0 else 14.0
+        rel_times = segment_speech_by_energy(
+            rem_audio, min_speech_sec=0.5, max_segment_sec=max_seg_len, min_silence_sec=0.4
+        )
+        if not rel_times:
+            return session
+
+        rel_times = self.diarizer.split_segments_on_speaker_change(rem_audio, rel_times)
+
+        # Match remaining segments against existing session speaker voiceprints (or online assignment)
+        seg_times: List[Tuple[float, float]] = []
+        speaker_ids: List[str] = []
+        for rs, re_t in rel_times:
+            clip = rem_audio[int(rs * SAMPLE_RATE) : int(re_t * SAMPLE_RATE)]
+            spk_id, session.embeddings = self.diarizer.assign_speaker_online(
+                clip, session.embeddings
+            )
+            seg_times.append((last_end + rs, last_end + re_t))
+            speaker_ids.append(spk_id)
+
+        if (last_end + rem_dur) > 240.0 and len(seg_times) > 1:
+            merged_times: List[Tuple[float, float]] = []
+            merged_spks: List[str] = []
+            cur_s, cur_e = seg_times[0]
+            cur_spk = speaker_ids[0]
+            for (nxt_s, nxt_e), nxt_spk in zip(seg_times[1:], speaker_ids[1:]):
+                if (
+                    nxt_spk == cur_spk
+                    and (nxt_s - cur_e) <= 1.6
+                    and (nxt_e - cur_s) <= 22.0
+                ):
+                    cur_e = nxt_e
+                else:
+                    merged_times.append((cur_s, cur_e))
+                    merged_spks.append(cur_spk)
+                    cur_s, cur_e = nxt_s, nxt_e
+                    cur_spk = nxt_spk
+            merged_times.append((cur_s, cur_e))
+            merged_spks.append(cur_spk)
+            seg_times = merged_times
+            speaker_ids = merged_spks
+
+        total = len(seg_times)
+        t_start = time.time()
+        last_partial_push = time.time()
+
+        for idx, ((s_sec, e_sec), spk_id) in enumerate(zip(seg_times, speaker_ids)):
+            if progress_cb:
+                pct = 25 + int(70 * (idx + 1) / max(1, total))
+                eta_suffix = ""
+                if idx >= 2:
+                    elapsed = time.time() - t_start
+                    avg_per_seg = elapsed / float(idx)
+                    rem_sec = int(max(0.0, avg_per_seg * (total - idx)))
+                    if rem_sec >= 60:
+                        eta_suffix = f" (~{rem_sec // 60}m {rem_sec % 60:02d}s remaining)"
+                    elif rem_sec > 2:
+                        eta_suffix = f" (~{rem_sec}s remaining)"
+                progress_cb(
+                    f"Resuming segment {idx + 1}/{total}{eta_suffix}...", pct
+                )
+
+            clip = self.store.read_audio_slice(session.id, s_sec, e_sec)
+            existing_spk = session.speakers.get(spk_id)
+            forced_lang = (
+                existing_spk.language
+                if (existing_spk and existing_spk.language != "auto")
+                else None
+            )
+            conv_ctx, spk_ctx = self._build_conversation_context(
+                session, current_speaker_id=spk_id
+            )
+            detected_lang, orig_text, trans_text, conf, raw_stt_text = (
+                self.transcribe_and_translate_clip(
+                    clip,
+                    forced_language=forced_lang,
+                    target_language=session.target_language,
+                    model_id=session.whisper_model,
+                    clarification_model=session.clarification_model,
+                    translation_model=session.translation_model,
+                    allowed_languages=session.spoken_languages,
+                    conversation_context=conv_ctx,
+                    speaker_context=spk_ctx,
+                )
+            )
+            if not orig_text or not orig_text.strip(" ()[].,-?!\"'"):
+                continue
+
+            self.store.ensure_speaker(session, spk_id)
+            seg_obj = TranscriptSegment(
+                id=uuid.uuid4().hex[:10],
+                speaker_id=spk_id,
+                start=round(s_sec, 2),
+                end=round(e_sec, 2),
+                source_language=detected_lang,
+                original_text=orig_text,
+                translated_text=trans_text,
+                target_language=session.target_language,
+                confidence=round(conf, 3),
+                raw_text=raw_stt_text,
+            )
+            session.segments.append(seg_obj)
+
+            now_ts = time.time()
+            if (len(session.segments) % 5 == 0) or (now_ts - last_partial_push >= 8.0):
+                last_partial_push = now_ts
+                self.store.save_session(session)
+                if on_partial_update:
+                    on_partial_update(session)
+
+        self.store.save_session(session)
+        if progress_cb:
+            progress_cb("Completed!", 100)
         return session
 
     def evict_model_cache(self, model_type: str, model_id: str = "") -> None:

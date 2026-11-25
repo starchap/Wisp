@@ -64,6 +64,11 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
     if (!el) return;
     const now = el.currentTime;
     setCurrentTime(now);
+    if (session?.id && now > 1) {
+      try {
+        localStorage.setItem(`wisp_audio_pos_${session.id}`, String(Math.floor(now)));
+      } catch (_) {}
+    }
 
     if (stopAtRef.current !== null && now >= stopAtRef.current) {
       el.pause();
@@ -124,6 +129,21 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
         onLoadedMetadata={() => {
           if (audioRef.current && isFinite(audioRef.current.duration)) {
             setDuration(audioRef.current.duration);
+            if (session?.id) {
+              try {
+                const savedPos = Number(
+                  localStorage.getItem(`wisp_audio_pos_${session.id}`) || '0'
+                );
+                if (
+                  savedPos > 1 &&
+                  savedPos < audioRef.current.duration - 2 &&
+                  audioRef.current.currentTime === 0
+                ) {
+                  audioRef.current.currentTime = savedPos;
+                  setCurrentTime(savedPos);
+                }
+              } catch (_) {}
+            }
           }
         }}
         onEnded={() => {
