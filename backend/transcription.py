@@ -7,8 +7,10 @@ Uses Microsoft's digitally signed `onnxruntime` directly — zero unsigned `sher
 import base64
 import difflib
 import json
+import os
 import re
 import threading
+import time
 import uuid
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -153,7 +155,8 @@ class OpusPairRunner:
         self.sp_tgt.load(str(model_dir / "target.spm"))
 
         sess_opts = ort.SessionOptions()
-        sess_opts.intra_op_num_threads = 4
+        sess_opts.intra_op_num_threads = max(4, min(12, (os.cpu_count() or 4) - 1))
+        sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         self.encoder = ort.InferenceSession(
             str(model_dir / "onnx" / "encoder_model_quantized.onnx"),
             sess_options=sess_opts,
@@ -987,7 +990,8 @@ class WhisperONNXRunner:
             paths = ensure_whisper_model(model_id)
 
         sess_opts = ort.SessionOptions()
-        sess_opts.intra_op_num_threads = 4
+        sess_opts.intra_op_num_threads = max(4, min(12, (os.cpu_count() or 4) - 1))
+        sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         try:
             engine_str = str(paths.get("engine", ""))
             self.is_hf_onnx = engine_str == "hf-whisper-onnx"
@@ -1704,22 +1708,27 @@ class LocalSpeechPipeline:
         audio_16k: np.ndarray,
         num_speakers: Optional[int] = None,
         progress_cb: Optional[Callable[[str, int], None]] = None,
+        on_partial_update: Optional[Callable[[MeetingSession], None]] = None,
     ) -> MeetingSession:
+        total_audio_sec = len(audio_16k) / float(SAMPLE_RATE)
         if progress_cb:
             progress_cb("Saving normalized audio for playback...", 10)
         self.store.write_full_audio(session.id, audio_16k)
         self.store.save_session(session)
+        if on_partial_update:
+            on_partial_update(session)
 
         if progress_cb:
             progress_cb(
-                f"Preparing local Whisper ONNX ({session.whisper_model}) model...", 20
+                f"Preparing local Whisper ONNX ({session.whisper_model}) model...", 18
             )
         self._get_whisper_runner(session.whisper_model)
 
         if progress_cb:
-            progress_cb("Detecting speech segments across recording...", 35)
+            progress_cb("Detecting speech segments across recording...", 28)
+        max_seg_len = 20.0 if total_audio_sec > 300.0 else 14.0
         seg_times = segment_speech_by_energy(
-            audio_16k, min_speech_sec=0.5, max_segment_sec=14.0, min_silence_sec=0.4
+            audio_16k, min_speech_sec=0.5, max_segment_sec=max_seg_len, min_silence_sec=0.4
         )
         if not seg_times:
             self.store.save_session(session)
@@ -1728,24 +1737,63 @@ class LocalSpeechPipeline:
             return session
 
         if progress_cb:
-            progress_cb("Diarizing speakers (recognizing distinct voices)...", 55)
+            progress_cb("Diarizing speakers (recognizing distinct voices)...", 42)
         seg_times = self.diarizer.split_segments_on_speaker_change(
             audio_16k, seg_times
         )
         speaker_ids, centroids = self.diarizer.cluster_segments_batch(
             audio_16k, seg_times, num_speakers=num_speakers
         )
+
+        # Optimization for long recordings (> 4 minutes, e.g. 1-2 hour MP4 meetings):
+        # Since Whisper's ONNX encoder always computes a fixed 30.0-second window ([1, n_mels, 3000]),
+        # merging consecutive short utterances by the SAME speaker (with gap <= 1.6s, up to 22.0s)
+        # cuts Whisper encoder runs by 3x-4x while giving Whisper full sentences for higher accuracy!
+        if total_audio_sec > 240.0 and len(seg_times) > 1:
+            merged_times: List[Tuple[float, float]] = []
+            merged_spks: List[str] = []
+            cur_s, cur_e = seg_times[0]
+            cur_spk = speaker_ids[0]
+            for (nxt_s, nxt_e), nxt_spk in zip(seg_times[1:], speaker_ids[1:]):
+                if (
+                    nxt_spk == cur_spk
+                    and (nxt_s - cur_e) <= 1.6
+                    and (nxt_e - cur_s) <= 22.0
+                ):
+                    cur_e = nxt_e
+                else:
+                    merged_times.append((cur_s, cur_e))
+                    merged_spks.append(cur_spk)
+                    cur_s, cur_e = nxt_s, nxt_e
+                    cur_spk = nxt_spk
+            merged_times.append((cur_s, cur_e))
+            merged_spks.append(cur_spk)
+            seg_times = merged_times
+            speaker_ids = merged_spks
+
         # Strictly isolate speakers and segments to this session's audio
         session.speakers = {}
         session.embeddings = centroids
         session.segments = []
 
         total = len(seg_times)
+        t_start = time.time()
+        last_partial_push = time.time()
+
         for idx, ((s_sec, e_sec), spk_id) in enumerate(zip(seg_times, speaker_ids)):
             if progress_cb:
-                pct = 60 + int(35 * (idx + 1) / max(1, total))
+                pct = 48 + int(48 * (idx + 1) / max(1, total))
+                eta_suffix = ""
+                if idx >= 2:
+                    elapsed = time.time() - t_start
+                    avg_per_seg = elapsed / float(idx)
+                    rem_sec = int(max(0.0, avg_per_seg * (total - idx)))
+                    if rem_sec >= 60:
+                        eta_suffix = f" (~{rem_sec // 60}m {rem_sec % 60:02d}s remaining)"
+                    elif rem_sec > 2:
+                        eta_suffix = f" (~{rem_sec}s remaining)"
                 progress_cb(
-                    f"Transcribing & translating segment {idx + 1}/{total}...", pct
+                    f"Transcribing & translating segment {idx + 1}/{total}{eta_suffix}...", pct
                 )
 
             clip = audio_16k[int(s_sec * SAMPLE_RATE) : int(e_sec * SAMPLE_RATE)]
@@ -1790,6 +1838,15 @@ class LocalSpeechPipeline:
                 raw_text=raw_stt_text,
             )
             session.segments.append(seg_obj)
+
+            # Live incremental save & UI broadcast every 5 segments or 8 seconds so 2-hour files
+            # stream paragraphs live onto the screen and never lose progress!
+            now_ts = time.time()
+            if (len(session.segments) % 5 == 0) or (now_ts - last_partial_push >= 8.0):
+                last_partial_push = now_ts
+                self.store.save_session(session)
+                if on_partial_update:
+                    on_partial_update(session)
 
         # Second-Pass Global & Speaker-Aware Clarification across the full recording:
         # Now that we know what the entire interview is about and how each speaker speaks,

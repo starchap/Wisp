@@ -51,6 +51,7 @@ from models_manager import (
 from session_store import (
     SAMPLE_RATE,
     SessionStore,
+    decode_audio_file_to_16k_mono,
     decode_audio_to_16k_mono,
 )
 from transcription import LocalSpeechPipeline
@@ -708,27 +709,39 @@ def api_reassign_segment_speaker(
 @app.post("/api/sessions/{session_id}/upload")
 async def api_upload_recording(
     session_id: str,
-    file: UploadFile = File(...),
+    file: Optional[UploadFile] = File(None),
+    local_file_path: Optional[str] = Form(None),
     num_speakers: Optional[int] = Form(None),
     original_filename: Optional[str] = Form(None),
 ):
     """
     Import an existing meeting recording (.wav, .mp3, .m4a, .mp4, .flac, .ogg, .webm)
     and run local speaker diarization, per-speaker language transcription, and translation.
+    Supports both direct local/network file paths (`local_file_path`, zero RAM overhead for 2-hour MP4 files)
+    and chunked HTTP streaming uploads.
     """
+    import shutil
+    import tempfile
+    from pathlib import Path
+
     session = store.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    raw_bytes = await file.read()
-    display_filename = original_filename or file.filename or "audio.wav"
-    try:
-        audio_16k = decode_audio_to_16k_mono(raw_bytes, filename=file.filename or display_filename)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Could not decode audio file: {exc}")
+    direct_path: Optional[str] = None
+    temp_upload_path: Optional[str] = None
 
-    if len(audio_16k) == 0:
-        raise HTTPException(status_code=400, detail="Audio file contains no valid audio samples.")
+    if local_file_path and local_file_path.strip() and Path(local_file_path.strip()).exists():
+        direct_path = local_file_path.strip()
+        display_filename = original_filename or Path(direct_path).name
+    elif file is not None:
+        display_filename = original_filename or file.filename or "audio.wav"
+        suffix = Path(file.filename or display_filename).suffix or ".mp4"
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp_f:
+            shutil.copyfileobj(file.file, tmp_f, length=4 * 1024 * 1024)
+            temp_upload_path = tmp_f.name
+    else:
+        raise HTTPException(status_code=400, detail="No audio/video file provided.")
 
     session.source_file_name = display_filename
     session.speakers = {}
@@ -744,12 +757,19 @@ async def api_upload_recording(
         )
 
     def _worker():
+        target_path = direct_path or temp_upload_path
         try:
+            _progress(f"Extracting 16kHz audio track from '{display_filename}'...", 5)
+            audio_16k = decode_audio_file_to_16k_mono(str(target_path))
+            if len(audio_16k) == 0:
+                raise ValueError("Audio/video file contains no valid audio samples.")
+
             pipeline.process_uploaded_file(
                 session,
                 audio_16k,
                 num_speakers=num_speakers if (num_speakers and num_speakers > 0) else None,
                 progress_cb=_progress,
+                on_partial_update=lambda s: broadcast_event("session_updated", s.to_dict()),
             )
             broadcast_event("session_updated", session.to_dict())
         except Exception as exc:
@@ -758,6 +778,12 @@ async def api_upload_recording(
                 "upload_progress",
                 {"session_id": session_id, "message": f"Error: {exc}", "percent": 100, "error": str(exc)},
             )
+        finally:
+            if temp_upload_path:
+                try:
+                    Path(temp_upload_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
 
     threading.Thread(target=_worker, daemon=True).start()
     return {"status": "processing", "session_id": session_id}

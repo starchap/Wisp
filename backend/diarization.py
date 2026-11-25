@@ -266,11 +266,15 @@ class LocalSpeakerDiarizer:
             return segments_times
 
         total_dur = len(full_audio_16k) / float(SAMPLE_RATE)
+        # For very long recordings (> 10 minutes, e.g. 1-2 hour MP4 meetings), use a faster hop
+        # and only inspect longer continuous segments (>= 5.5s) so diarization remains snappy.
+        effective_hop = max(hop_sec, 1.6) if total_dur > 600.0 else hop_sec
+        min_split_dur = 5.5 if total_dur > 600.0 else 3.6
         refined: List[Tuple[float, float]] = []
 
         for s_sec, e_sec in segments_times:
             dur = e_sec - s_sec
-            if dur < 3.6:
+            if dur < min_split_dur:
                 refined.append((s_sec, e_sec))
                 continue
 
@@ -286,7 +290,7 @@ class LocalSpeakerDiarizer:
                     if emb is not None:
                         times.append(t + win_sec / 2.0)
                         embs.append(emb)
-                t += hop_sec
+                t += effective_hop
 
             if len(embs) < 3:
                 refined.append((s_sec, e_sec))

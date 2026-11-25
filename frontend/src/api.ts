@@ -323,13 +323,35 @@ export async function uploadAudioRecording(
   file: File,
   numSpeakers?: number
 ): Promise<void> {
-  const preparedFile = await transcodeContainerAudioIfNeeded(file);
+  const w = typeof window !== 'undefined' ? (window as any) : null;
+  let localPath = '';
+  try {
+    if (w?.wispElectron?.getPathForFile) {
+      localPath = w.wispElectron.getPathForFile(file) || '';
+    } else if ((file as any)?.path) {
+      localPath = (file as any).path || '';
+    }
+  } catch (_) {}
+
   const form = new FormData();
-  form.append('file', preparedFile);
   form.append('original_filename', file.name);
   if (numSpeakers && numSpeakers > 0) {
     form.append('num_speakers', String(numSpeakers));
   }
+
+  // In the Electron desktop app, pass the direct local/network file path so huge 2-hour MP4 files
+  // are decoded directly from disk via Windows Media Foundation without loading GBs into RAM!
+  if (localPath) {
+    form.append('local_file_path', localPath);
+  } else {
+    // Only use in-browser WebAudio transcode for small container files (< 60 MB)
+    const preparedFile =
+      file.size <= 60 * 1024 * 1024
+        ? await transcodeContainerAudioIfNeeded(file)
+        : file;
+    form.append('file', preparedFile);
+  }
+
   const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/upload`, {
     method: 'POST',
     body: form,
