@@ -3249,22 +3249,33 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
   const { t, uiLanguage, setUiLanguage, theme, setTheme } = useI18n();
   const modelsStatus = rawModelsStatus || FALLBACK_MODELS_STATUS;
   const [step, setStep] = useState<1 | 2>(1);
+  const [onboardingModelTab, setOnboardingModelTab] = useState<
+    'splitters' | 'transcribes' | 'clarifications' | 'translations'
+  >('transcribes');
   const [storagePathInput, setStoragePathInput] = useState<string>('');
   const [pathSavedNotice, setPathSavedNotice] = useState(false);
   const [pathError, setPathError] = useState<string | null>(null);
+  const [selectedSpeaker, setSelectedSpeaker] = useState<string>(
+    modelsStatus.active_diarization_model || 'campplus-voxceleb'
+  );
   const [selectedWhisper, setSelectedWhisper] = useState<string>('small');
   const [onboardingSttFilter, setOnboardingSttFilter] =
     useState<SttLanguageFilter>('multilingual');
-  const [selectedClarifier, setSelectedClarifier] =
-    useState<string>('none');
-  const [selectedTranslator, setSelectedTranslator] =
-    useState<string>('none');
+  const [onboardingClarifyFilter, setOnboardingClarifyFilter] =
+    useState<string>('all');
+  const [selectedClarifier, setSelectedClarifier] = useState<string>('none');
+  const [selectedTranslator, setSelectedTranslator] = useState<string>('none');
+  const [onboardingTransFrom, setOnboardingTransFrom] = useState<string>('da');
+  const [onboardingTransTo, setOnboardingTransTo] = useState<string>('en');
 
   useEffect(() => {
     if (isOpen && modelsStatus) {
       setStoragePathInput(
         modelsStatus.storage_directory || modelsStatus.models_directory
       );
+      if (modelsStatus.active_diarization_model) {
+        setSelectedSpeaker(modelsStatus.active_diarization_model);
+      }
       const firstDlWhisper = modelsStatus.whisper_models.find(
         (w) => w.downloaded
       );
@@ -3272,11 +3283,36 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
         setSelectedWhisper(firstDlWhisper.id);
       }
     }
-  }, [isOpen, modelsStatus?.storage_directory, modelsStatus?.models_directory]);
+  }, [
+    isOpen,
+    modelsStatus?.storage_directory,
+    modelsStatus?.models_directory,
+    modelsStatus?.active_diarization_model,
+  ]);
 
   if (!isOpen) return null;
 
-  const spkDownloaded = modelsStatus.speaker_diarization.downloaded;
+  const diarizationList =
+    modelsStatus.speaker_diarization_models &&
+    modelsStatus.speaker_diarization_models.length > 0
+      ? modelsStatus.speaker_diarization_models
+      : [
+          {
+            id: modelsStatus.speaker_diarization.id,
+            name: modelsStatus.speaker_diarization.name,
+            description:
+              'Extracts acoustic voice embeddings locally via ONNX Runtime to cluster distinct voices.',
+            size_mb: modelsStatus.speaker_diarization.size_mb,
+            type: 'onnx',
+            downloaded: modelsStatus.speaker_diarization.downloaded,
+            local_path: modelsStatus.speaker_diarization.local_path,
+          },
+        ];
+
+  const chosenSpeakerObj =
+    diarizationList.find((s) => s.id === selectedSpeaker) || diarizationList[0];
+  const spkDownloaded =
+    selectedSpeaker === 'none' || !!chosenSpeakerObj?.downloaded;
   const chosenWhisperObj = modelsStatus.whisper_models.find(
     (w) => w.id === selectedWhisper
   );
@@ -3289,11 +3325,41 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
     (tm) => tm.id === selectedTranslator
   );
 
+  // Compute required OPUS pairs when opus-mt-da-en is selected
+  const opusMap = modelsStatus.opus_pairs_status || {};
+  const directPairKey = `${onboardingTransFrom}-${onboardingTransTo}`;
+  const hasDirectPair = Boolean(opusMap[directPairKey]);
+  const isSameTransLang = onboardingTransFrom === onboardingTransTo;
+  const pivotPairA = `${onboardingTransFrom}-en`;
+  const pivotPairB = `en-${onboardingTransTo}`;
+  const hasPivotPair =
+    !isSameTransLang &&
+    !hasDirectPair &&
+    onboardingTransFrom !== 'en' &&
+    onboardingTransTo !== 'en' &&
+    Boolean(opusMap[pivotPairA]) &&
+    Boolean(opusMap[pivotPairB]);
+  const selectedOpusPairs = hasDirectPair
+    ? [directPairKey]
+    : hasPivotPair
+    ? [pivotPairA, pivotPairB]
+    : ['da-en', 'en-da'];
+  const selectedOpusReady =
+    selectedOpusPairs.length > 0 &&
+    selectedOpusPairs.every((p) => opusMap[p]?.downloaded);
+
+  const translatorReady =
+    selectedTranslator === 'none' ||
+    selectedTranslator === 'whisper-native' ||
+    (selectedTranslator === 'opus-mt-da-en'
+      ? selectedOpusReady
+      : !!chosenTranslatorObj?.downloaded);
+
   const isChosenSelectionReady =
     spkDownloaded &&
     !!chosenWhisperObj?.downloaded &&
     (chosenClarifierObj ? !!chosenClarifierObj.downloaded : true) &&
-    !!chosenTranslatorObj?.downloaded;
+    translatorReady;
 
   const handleSaveStoragePath = async (customPath?: string) => {
     const target = (customPath ?? storagePathInput).trim();
@@ -3323,19 +3389,36 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
     }
   };
 
+  const pairLangs = [
+    { code: 'da', label: 'Dansk (DA)' },
+    { code: 'en', label: 'English (EN)' },
+    { code: 'sv', label: 'Svenska (SV)' },
+    { code: 'no', label: 'Norsk (NO)' },
+    { code: 'de', label: 'Deutsch (DE)' },
+    { code: 'es', label: 'Español (ES)' },
+    { code: 'fr', label: 'Français (FR)' },
+    { code: 'it', label: 'Italiano (IT)' },
+  ];
+
   return (
     <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-md flex items-center justify-center p-4 select-none">
-      <div className="bg-slate-900 border border-slate-700/80 rounded-2xl max-w-3xl w-full shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+      <div className="relative bg-slate-900 border border-slate-700/80 rounded-3xl max-w-4xl w-full shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+        {/* Subtle Intro-inspired Ambient Top Glow */}
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute -top-24 left-1/2 -translate-x-1/2 w-[520px] h-44 rounded-full bg-gradient-to-r from-blue-600/20 via-indigo-500/20 to-emerald-500/15 blur-3xl"
+        />
+
         {/* Header */}
-        <div className="px-6 py-5 border-b border-slate-800 flex items-center justify-between gap-4 bg-slate-950/60">
+        <div className="relative px-6 py-5 border-b border-slate-800/80 flex flex-wrap items-center justify-between gap-4 bg-slate-950/50">
           <div className="flex items-center gap-3.5">
             <img
               src="./wisp-icon.png"
-              alt="Wisp"
+              alt="WispAI"
               className="w-11 h-11 rounded-2xl object-cover shadow-lg shadow-indigo-500/25 shrink-0"
             />
             <div>
-              <h2 className="text-base font-bold text-white">
+              <h2 className="text-base font-bold text-white tracking-tight">
                 {t('onboardingTitle')}
               </h2>
               <p className="text-xs text-slate-400 mt-0.5">
@@ -3345,14 +3428,14 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
           </div>
 
           {/* Step Indicator Pills */}
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-1.5 bg-slate-950/80 p-1 rounded-xl border border-slate-800 shrink-0">
             <button
               type="button"
               onClick={() => setStep(1)}
-              className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
                 step === 1
                   ? 'bg-blue-600 text-white shadow'
-                  : 'bg-slate-800 text-slate-400 hover:text-white'
+                  : 'text-slate-400 hover:text-white'
               }`}
             >
               {t('onboardingStep1')}
@@ -3360,10 +3443,10 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
             <button
               type="button"
               onClick={() => setStep(2)}
-              className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
                 step === 2
                   ? 'bg-blue-600 text-white shadow'
-                  : 'bg-slate-800 text-slate-400 hover:text-white'
+                  : 'text-slate-400 hover:text-white'
               }`}
             >
               {t('onboardingStep2')}
@@ -3372,14 +3455,97 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
         </div>
 
         {/* Body */}
-        <div className="p-6 overflow-y-auto flex-1 space-y-5">
+        <div className="relative p-6 overflow-y-auto flex-1 space-y-4">
           {step === 1 ? (
-            <>
-              {/* 1. Storage Folder Picker */}
+            <div className="space-y-4">
+              {/* 1. Interface Language & Appearance Theme (Front & Center) */}
+              <div className="rounded-2xl bg-slate-950/60 border border-slate-800 divide-y divide-slate-800/80">
+                <div className="p-5 flex flex-wrap items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-xl bg-blue-500/15 border border-blue-500/30 flex items-center justify-center text-blue-400 shrink-0">
+                      <Globe className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-white">
+                        {t('uiLanguageTitle')}
+                      </div>
+                      <div className="text-[11px] text-slate-400 mt-0.5">
+                        {t('uiLanguageDesc')}
+                      </div>
+                    </div>
+                  </div>
+                  <select
+                    value={uiLanguage}
+                    onChange={(e) =>
+                      setUiLanguage(e.target.value as UILanguage)
+                    }
+                    className="bg-slate-900 border border-slate-700 hover:border-blue-500/60 focus:border-blue-500 rounded-xl px-3.5 py-2 text-xs font-semibold text-white focus:outline-none cursor-pointer min-w-[180px]"
+                  >
+                    {UI_LANGUAGES.map((ul) => (
+                      <option key={ul.code} value={ul.code}>
+                        {ul.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="p-5 space-y-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-400 shrink-0">
+                      <Palette className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-white">
+                        {t('themeTitle')}
+                      </div>
+                      <div className="text-[11px] text-slate-400 mt-0.5">
+                        {t('themeDesc')}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-3">
+                    {(
+                      [
+                        {
+                          id: 'dark' as ThemeMode,
+                          label: t('themeDark'),
+                          icon: <Moon className="w-4 h-4" />,
+                        },
+                        {
+                          id: 'light' as ThemeMode,
+                          label: t('themeLight'),
+                          icon: <Sun className="w-4 h-4" />,
+                        },
+                        {
+                          id: 'system' as ThemeMode,
+                          label: t('themeSystem'),
+                          icon: <Monitor className="w-4 h-4" />,
+                        },
+                      ] as const
+                    ).map((opt) => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => setTheme(opt.id)}
+                        className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl border text-xs font-semibold transition ${
+                          theme === opt.id
+                            ? 'bg-blue-600 border-blue-500 text-white shadow-md shadow-blue-600/20'
+                            : 'bg-slate-900 border-slate-700/80 text-slate-300 hover:border-slate-600'
+                        }`}
+                      >
+                        {opt.icon}
+                        <span>{opt.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* 2. Storage Folder Picker */}
               <div className="rounded-2xl bg-slate-950/60 border border-slate-800 p-5 space-y-3">
                 <div className="flex items-start gap-3">
-                  <div className="w-9 h-9 rounded-xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 shrink-0 mt-0.5">
-                    <FolderOpen className="w-5 h-5" />
+                  <div className="w-9 h-9 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0 mt-0.5">
+                    <FolderOpen className="w-4 h-4" />
                   </div>
                   <div className="flex-1">
                     <div className="text-xs font-bold text-white">
@@ -3436,14 +3602,14 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
 
                 <div className="flex flex-wrap items-center gap-4 pt-1 text-[11px] text-slate-400">
                   <span>
-                    Models folder:{' '}
+                    Models:{' '}
                     <code className="text-slate-300 font-mono">
                       {modelsStatus.models_directory}
                     </code>
                   </span>
                   {modelsStatus.sessions_directory && (
                     <span>
-                      Sessions folder:{' '}
+                      Sessions:{' '}
                       <code className="text-slate-300 font-mono">
                         {modelsStatus.sessions_directory}
                       </code>
@@ -3451,80 +3617,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                   )}
                 </div>
               </div>
-
-              {/* 2. Interface Language & Theme */}
-              <div className="rounded-2xl bg-slate-950/60 border border-slate-800 divide-y divide-slate-800/80">
-                <div className="p-4 flex items-center justify-between gap-4">
-                  <div>
-                    <div className="text-xs font-bold text-white">
-                      {t('uiLanguageTitle')}
-                    </div>
-                    <div className="text-[11px] text-slate-400 mt-0.5">
-                      {t('uiLanguageDesc')}
-                    </div>
-                  </div>
-                  <select
-                    value={uiLanguage}
-                    onChange={(e) =>
-                      setUiLanguage(e.target.value as UILanguage)
-                    }
-                    className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs font-semibold text-white focus:outline-none focus:border-blue-500"
-                  >
-                    {UI_LANGUAGES.map((ul) => (
-                      <option key={ul.code} value={ul.code}>
-                        {ul.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="p-4 space-y-2.5">
-                  <div>
-                    <div className="text-xs font-bold text-white">
-                      {t('themeTitle')}
-                    </div>
-                    <div className="text-[11px] text-slate-400 mt-0.5">
-                      {t('themeDesc')}
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-3 gap-3">
-                    {(
-                      [
-                        {
-                          id: 'dark' as ThemeMode,
-                          label: t('themeDark'),
-                          icon: <Moon className="w-4 h-4" />,
-                        },
-                        {
-                          id: 'light' as ThemeMode,
-                          label: t('themeLight'),
-                          icon: <Sun className="w-4 h-4" />,
-                        },
-                        {
-                          id: 'system' as ThemeMode,
-                          label: t('themeSystem'),
-                          icon: <Monitor className="w-4 h-4" />,
-                        },
-                      ] as const
-                    ).map((opt) => (
-                      <button
-                        key={opt.id}
-                        type="button"
-                        onClick={() => setTheme(opt.id)}
-                        className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl border text-xs font-semibold transition ${
-                          theme === opt.id
-                            ? 'bg-blue-600 border-blue-500 text-white shadow-md shadow-blue-600/20'
-                            : 'bg-slate-900 border-slate-700/80 text-slate-300 hover:border-slate-600'
-                        }`}
-                      >
-                        {opt.icon}
-                        <span>{opt.label}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </>
+            </div>
           ) : (
             <div className="space-y-4">
               {progressText && (
@@ -3538,45 +3631,168 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                 </div>
               )}
 
-              {/* Stage 1: Speaker Diarization */}
-              <div className="p-4 rounded-2xl bg-slate-950/60 border border-slate-800 flex items-center justify-between gap-4">
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-400 shrink-0">
-                    <Users className="w-4 h-4" />
+              {/* Compact Hardware & GPU Acceleration Bar (matching Settings) */}
+              {modelsStatus.system_specs && (
+                <div className="rounded-xl bg-slate-950/60 border border-slate-800 px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <div className="flex flex-wrap items-center gap-2 text-slate-300">
+                    <Cpu className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                    <span className="font-mono text-[11px]">
+                      {modelsStatus.system_specs.cpu_name} &bull;{' '}
+                      {modelsStatus.system_specs.cpu_threads} Threads &bull;{' '}
+                      {modelsStatus.system_specs.total_ram_gb} GB RAM
+                      {modelsStatus.system_specs.gpu_detected &&
+                      modelsStatus.system_specs.gpu_name
+                        ? ` • ${modelsStatus.system_specs.gpu_name}`
+                        : ''}
+                    </span>
                   </div>
-                  <div>
-                    <div className="text-xs font-bold text-white">
-                      {t('requiredSpeakerModel')} —{' '}
-                      {modelsStatus.speaker_diarization.name}
-                    </div>
-                    <div className="text-[11px] text-slate-400">
-                      ~{modelsStatus.speaker_diarization.size_mb} MB &bull;{' '}
-                      {t('step1ModelDesc')}
-                    </div>
-                  </div>
+                  {modelsStatus.system_specs.gpu_detected && (
+                    <label className="inline-flex items-center gap-2 cursor-pointer select-none px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-700/80">
+                      <input
+                        type="checkbox"
+                        checked={
+                          modelsStatus.system_specs.gpu_acceleration_enabled !==
+                          false
+                        }
+                        onChange={async (e) => {
+                          try {
+                            const updated = await updateGpuAcceleration(
+                              e.target.checked
+                            );
+                            onStorageUpdated(updated);
+                          } catch (_) {}
+                        }}
+                        className="w-3.5 h-3.5 rounded border-slate-600 text-indigo-500 focus:ring-indigo-500"
+                      />
+                      <span className="text-[11px] font-semibold text-white">
+                        GPU Acceleration
+                      </span>
+                    </label>
+                  )}
                 </div>
+              )}
 
-                {spkDownloaded ? (
-                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-400 text-xs font-semibold border border-emerald-500/30 shrink-0">
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    {t('readyOffline')}
-                  </span>
-                ) : (
-                  <span className="text-xs text-indigo-300 font-semibold shrink-0">
-                    Included in setup
-                  </span>
-                )}
+              {/* 4-Tab Bar Matching Settings -> Local AI Models */}
+              <div className="flex flex-wrap gap-1.5 p-1.5 rounded-xl bg-slate-950/80 border border-slate-800">
+                {[
+                  {
+                    id: 'splitters' as const,
+                    label: '1. SpeechSplitters',
+                    icon: Users,
+                    activeClass:
+                      'bg-indigo-600 text-white shadow-md shadow-indigo-600/25',
+                  },
+                  {
+                    id: 'transcribes' as const,
+                    label: '2. Transcribes',
+                    icon: Cpu,
+                    activeClass:
+                      'bg-blue-600 text-white shadow-md shadow-blue-600/25',
+                  },
+                  {
+                    id: 'clarifications' as const,
+                    label: '3. Clarifications',
+                    icon: Sparkles,
+                    activeClass:
+                      'bg-amber-600 text-white shadow-md shadow-amber-600/25',
+                  },
+                  {
+                    id: 'translations' as const,
+                    label: '4. Translations',
+                    icon: Languages,
+                    activeClass:
+                      'bg-emerald-600 text-white shadow-md shadow-emerald-600/25',
+                  },
+                ].map((tab) => {
+                  const Icon = tab.icon;
+                  const isActive = onboardingModelTab === tab.id;
+                  return (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setOnboardingModelTab(tab.id)}
+                      className={`flex-1 min-w-[130px] inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition ${
+                        isActive
+                          ? tab.activeClass
+                          : 'text-slate-400 hover:text-white hover:bg-slate-800/70'
+                      }`}
+                    >
+                      <Icon className="w-3.5 h-3.5 shrink-0" />
+                      <span>{tab.label}</span>
+                    </button>
+                  );
+                })}
               </div>
 
-              {/* Stage 2 & Stage 3 side-by-side */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Stage 2: Whisper Speech-to-Text */}
-                <div className="p-4 rounded-2xl bg-slate-950/60 border border-slate-800 space-y-2.5">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-2 text-xs font-bold text-white">
-                      <Cpu className="w-4 h-4 text-blue-400" />
-                      <span>{t('chooseSttModel')}</span>
-                    </div>
+              {/* TAB 1: SpeechSplitters */}
+              {onboardingModelTab === 'splitters' && (
+                <div className="rounded-2xl bg-slate-950/60 border border-slate-800 p-4 space-y-2.5">
+                  {diarizationList.map((sm) => {
+                    const isSel = selectedSpeaker === sm.id;
+                    const isRec = sm.id === 'campplus-voxceleb';
+                    return (
+                      <div
+                        key={sm.id}
+                        onClick={async () => {
+                          setSelectedSpeaker(sm.id);
+                          try {
+                            const next = await updateDiarizationModel(sm.id);
+                            onStorageUpdated(next);
+                          } catch (_) {}
+                        }}
+                        className={`p-3.5 rounded-xl border cursor-pointer transition flex items-start justify-between gap-3 ${
+                          isSel
+                            ? 'bg-indigo-950/30 border-indigo-500 shadow-md shadow-indigo-500/10'
+                            : 'bg-slate-900/90 border-slate-800 hover:border-slate-700'
+                        }`}
+                      >
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="text-xs font-bold text-white">
+                              {sm.name}
+                            </span>
+                            {isRec && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/40">
+                                <Sparkles className="w-2.5 h-2.5" />
+                                Recommended
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[11px] text-slate-400 mt-0.5">
+                            {sm.description}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {sm.downloaded ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 text-[10px] font-semibold border border-emerald-500/30">
+                              <CheckCircle2 className="w-3 h-3" />
+                              {t('readyOffline')}
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-mono text-slate-400 bg-slate-800 px-2 py-0.5 rounded">
+                              ~{sm.size_mb} MB
+                            </span>
+                          )}
+                          {isSel && (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-600 text-white">
+                              SELECTED
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* TAB 2: Transcribes */}
+              {onboardingModelTab === 'transcribes' && (
+                <div className="rounded-2xl bg-slate-950/60 border border-slate-800 p-4 space-y-3">
+                  <div className="p-2.5 rounded-xl bg-slate-900/90 border border-slate-800 flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-[11px] font-semibold text-slate-300 flex items-center gap-1.5">
+                      <Globe className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                      <span>Model Language:</span>
+                    </span>
                     <select
                       value={onboardingSttFilter}
                       onChange={(e) =>
@@ -3584,18 +3800,18 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                           e.target.value as SttLanguageFilter
                         )
                       }
-                      className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-[11px] font-semibold text-blue-300 focus:outline-none focus:border-blue-500 cursor-pointer"
+                      className="flex-1 min-w-[210px] bg-slate-950 border border-slate-700 hover:border-blue-500/60 focus:border-blue-500 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-white focus:outline-none cursor-pointer"
                     >
-                      <option value="multilingual">
-                        Multi-Language (Standard Whisper)
-                      </option>
-                      <option value="da">
-                        Dansk (DA) — Hviske & Røst
-                      </option>
-                      <option value="all">All Models</option>
+                      {STT_LANGUAGE_GROUP_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                      <option value="all">All Languages (All Models)</option>
                     </select>
                   </div>
-                  <div className="space-y-2">
+
+                  <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
                     {modelsStatus.whisper_models
                       .filter(
                         (wm) =>
@@ -3603,67 +3819,126 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                           getWhisperLanguageGroup(wm) === onboardingSttFilter
                       )
                       .map((wm) => {
-                      const isSel = selectedWhisper === wm.id;
-                      return (
-                        <div
-                          key={wm.id}
-                          onClick={() => setSelectedWhisper(wm.id)}
-                          className={`p-3 rounded-xl border cursor-pointer transition flex items-start justify-between gap-2 ${
-                            isSel
-                              ? 'bg-blue-950/30 border-blue-500'
-                              : 'bg-slate-900 border-slate-800 hover:border-slate-700'
-                          }`}
-                        >
-                          <div>
-                            <div className="text-xs font-bold text-white">
-                              {wm.name}
+                        const isSel = selectedWhisper === wm.id;
+                        const isRec =
+                          modelsStatus.system_specs
+                            ?.recommended_multilingual_id === wm.id ||
+                          modelsStatus.system_specs?.recommended_danish_id ===
+                            wm.id;
+                        return (
+                          <div
+                            key={wm.id}
+                            onClick={() => setSelectedWhisper(wm.id)}
+                            className={`p-3.5 rounded-xl border cursor-pointer transition flex items-start justify-between gap-3 ${
+                              isSel
+                                ? 'bg-blue-950/30 border-blue-500 shadow-md shadow-blue-500/10'
+                                : 'bg-slate-900/90 border-slate-800 hover:border-slate-700'
+                            }`}
+                          >
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span className="text-xs font-bold text-white">
+                                  {wm.name}
+                                </span>
+                                {isRec && (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/40">
+                                    <Sparkles className="w-2.5 h-2.5" />
+                                    Recommended for your PC
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-[11px] text-slate-400 mt-0.5">
+                                {wm.description}
+                              </div>
                             </div>
-                            <div className="text-[11px] text-slate-400 mt-0.5">
-                              {wm.description}
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              {wm.downloaded ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 text-[10px] font-semibold border border-emerald-500/30">
+                                  <CheckCircle2 className="w-3 h-3" />
+                                  {t('downloaded')}
+                                </span>
+                              ) : (
+                                <span className="text-[10px] font-mono text-slate-400 bg-slate-800 px-2 py-0.5 rounded">
+                                  ~{wm.size_mb} MB
+                                </span>
+                              )}
+                              {isSel && (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-600 text-white">
+                                  SELECTED
+                                </span>
+                              )}
                             </div>
                           </div>
-                          {wm.downloaded ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 text-[10px] font-semibold border border-emerald-500/30 shrink-0">
-                              <CheckCircle2 className="w-3 h-3" />
-                              {t('downloaded')}
-                            </span>
-                          ) : (
-                            <span className="text-[10px] font-mono text-slate-400 bg-slate-800 px-1.5 py-0.5 rounded shrink-0">
-                              ~{wm.size_mb} MB
-                            </span>
-                          )}
-                        </div>
-                      );
-                    })}
+                        );
+                      })}
                   </div>
                 </div>
+              )}
 
-                {/* Stage 3 & Stage 4: Context Clarifier + Local Translation AI Model */}
-                <div className="space-y-4">
-                  {/* Stage 3: Context Word Clarifier (3rd Model) */}
-                  <div className="p-4 rounded-2xl bg-slate-950/60 border border-slate-800 space-y-2.5">
-                    <div className="flex items-center gap-2 text-xs font-bold text-white">
-                      <Sparkles className="w-4 h-4 text-amber-400" />
-                      <span>{t('chooseClarifierModel')}</span>
-                    </div>
-                    <div className="space-y-2">
-                      {(
-                        modelsStatus.clarification_models ||
-                        FALLBACK_MODELS_STATUS.clarification_models ||
-                        []
-                      ).map((cm) => {
+              {/* TAB 3: Clarifications */}
+              {onboardingModelTab === 'clarifications' && (
+                <div className="rounded-2xl bg-slate-950/60 border border-slate-800 p-4 space-y-3">
+                  <div className="p-2.5 rounded-xl bg-slate-900/90 border border-slate-800 flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-[11px] font-semibold text-slate-300 flex items-center gap-1.5">
+                      <Globe className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                      <span>Model Language:</span>
+                    </span>
+                    <select
+                      value={onboardingClarifyFilter}
+                      onChange={(e) =>
+                        setOnboardingClarifyFilter(e.target.value)
+                      }
+                      className="flex-1 min-w-[210px] bg-slate-950 border border-slate-700 hover:border-amber-500/60 focus:border-amber-500 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-white focus:outline-none cursor-pointer"
+                    >
+                      <option value="all">All Languages (All Models)</option>
+                      <option value="da">Dansk (DA) — Danish &amp; Nordic</option>
+                      <option value="en">English (EN)</option>
+                      <option value="sv">Svenska (SV) — Swedish</option>
+                      <option value="no">Norsk (NO) — Norwegian</option>
+                      <option value="de">Deutsch (DE) — German</option>
+                      <option value="es">Español (ES) — Spanish</option>
+                      <option value="fr">Français (FR) — French</option>
+                      <option value="it">Italiano (IT) — Italian</option>
+                      <option value="multilingual">
+                        Multilingual (Global / 24 EU)
+                      </option>
+                    </select>
+                  </div>
+
+                  <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
+                    {(
+                      modelsStatus.clarification_models ||
+                      FALLBACK_MODELS_STATUS.clarification_models ||
+                      []
+                    )
+                      .filter((cm) => {
+                        if (onboardingClarifyFilter === 'all') return true;
+                        const sup = (
+                          cm.supported_languages ||
+                          cm.language_group ||
+                          'all'
+                        )
+                          .split(',')
+                          .map((s) => s.trim().toLowerCase())
+                          .filter(Boolean);
+                        return (
+                          sup.includes('all') ||
+                          sup.includes(onboardingClarifyFilter)
+                        );
+                      })
+                      .map((cm) => {
                         const isSel = selectedClarifier === cm.id;
                         return (
                           <div
                             key={cm.id}
                             onClick={() => setSelectedClarifier(cm.id)}
-                            className={`p-3 rounded-xl border cursor-pointer transition flex items-start justify-between gap-2 ${
+                            className={`p-3.5 rounded-xl border cursor-pointer transition flex items-start justify-between gap-3 ${
                               isSel
-                                ? 'bg-amber-950/25 border-amber-500'
-                                : 'bg-slate-900 border-slate-800 hover:border-slate-700'
+                                ? 'bg-amber-950/25 border-amber-500 shadow-md shadow-amber-500/10'
+                                : 'bg-slate-900/90 border-slate-800 hover:border-slate-700'
                             }`}
                           >
-                            <div>
+                            <div className="min-w-0">
                               <div className="text-xs font-bold text-white">
                                 {cm.name}
                               </div>
@@ -3671,78 +3946,212 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                                 {cm.description}
                               </div>
                             </div>
-                            {cm.downloaded ? (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 text-[10px] font-semibold border border-emerald-500/30 shrink-0">
-                                <CheckCircle2 className="w-3 h-3" />
-                                {t('readyOffline')}
-                              </span>
-                            ) : (
-                              <span className="text-[10px] font-mono text-slate-400 bg-slate-800 px-1.5 py-0.5 rounded shrink-0">
-                                ~{cm.size_mb} MB
-                              </span>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Stage 4: Local Translation AI Model */}
-                  <div className="p-4 rounded-2xl bg-slate-950/60 border border-slate-800 space-y-2.5">
-                    <div className="flex items-center gap-2 text-xs font-bold text-white">
-                      <Languages className="w-4 h-4 text-emerald-400" />
-                      <span>{t('chooseTranslationModelStep4')}</span>
-                    </div>
-                    <div className="space-y-2">
-                      {(modelsStatus.translation_models || [])
-                        .filter((tm) => tm.id !== 'whisper-native')
-                        .map((tm) => {
-                          const isSel = selectedTranslator === tm.id;
-                          return (
-                            <div
-                              key={tm.id}
-                              onClick={() => setSelectedTranslator(tm.id)}
-                              className={`p-3 rounded-xl border cursor-pointer transition flex items-start justify-between gap-2 ${
-                                isSel
-                                  ? 'bg-emerald-950/25 border-emerald-500'
-                                  : 'bg-slate-900 border-slate-800 hover:border-slate-700'
-                              }`}
-                            >
-                              <div>
-                                <div className="text-xs font-bold text-white">
-                                  {tm.name}
-                                </div>
-                                <div className="text-[11px] text-slate-400 mt-0.5">
-                                  {tm.description}
-                                </div>
-                              </div>
-                              {tm.downloaded ? (
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 text-[10px] font-semibold border border-emerald-500/30 shrink-0">
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              {cm.downloaded ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 text-[10px] font-semibold border border-emerald-500/30">
                                   <CheckCircle2 className="w-3 h-3" />
                                   {t('readyOffline')}
                                 </span>
                               ) : (
-                                <span className="text-[10px] font-mono text-slate-400 bg-slate-800 px-1.5 py-0.5 rounded shrink-0">
-                                  ~{tm.size_mb} MB
+                                <span className="text-[10px] font-mono text-slate-400 bg-slate-800 px-2 py-0.5 rounded">
+                                  ~{cm.size_mb} MB
+                                </span>
+                              )}
+                              {isSel && (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-600 text-white">
+                                  SELECTED
                                 </span>
                               )}
                             </div>
-                          );
-                        })}
-                    </div>
+                          </div>
+                        );
+                      })}
                   </div>
                 </div>
+              )}
+
+              {/* TAB 4: Translations */}
+              {onboardingModelTab === 'translations' && (
+                <div className="rounded-2xl bg-slate-950/60 border border-slate-800 p-4 space-y-3">
+                  {/* Language Pair Selector (From A ⇄ To B) */}
+                  <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800 space-y-2.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="flex-1 min-w-[120px]">
+                        <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                          From Language (A)
+                        </label>
+                        <select
+                          value={onboardingTransFrom}
+                          onChange={(e) =>
+                            setOnboardingTransFrom(e.target.value)
+                          }
+                          className="w-full px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-xs text-white focus:outline-none focus:border-emerald-500"
+                        >
+                          {pairLangs.map((l) => (
+                            <option key={l.code} value={l.code}>
+                              {l.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const prev = onboardingTransFrom;
+                          setOnboardingTransFrom(onboardingTransTo);
+                          setOnboardingTransTo(prev);
+                        }}
+                        className="mt-4 p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition shrink-0"
+                      >
+                        <ArrowLeftRight className="w-3.5 h-3.5" />
+                      </button>
+                      <div className="flex-1 min-w-[120px]">
+                        <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                          To Language (B)
+                        </label>
+                        <select
+                          value={onboardingTransTo}
+                          onChange={(e) => setOnboardingTransTo(e.target.value)}
+                          className="w-full px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-xs text-white focus:outline-none focus:border-emerald-500"
+                        >
+                          {pairLangs.map((l) => (
+                            <option key={l.code} value={l.code}>
+                              {l.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    {!isSameTransLang && (
+                      <div
+                        onClick={() => setSelectedTranslator('opus-mt-da-en')}
+                        className={`p-3 rounded-xl border cursor-pointer transition flex items-start justify-between gap-2 ${
+                          selectedTranslator === 'opus-mt-da-en'
+                            ? 'bg-emerald-950/25 border-emerald-500'
+                            : 'bg-slate-950/80 border-slate-800 hover:border-slate-700'
+                        }`}
+                      >
+                        <div>
+                          <div className="text-xs font-bold text-white">
+                            OPUS-MT {onboardingTransFrom.toUpperCase()} →{' '}
+                            {onboardingTransTo.toUpperCase()}{' '}
+                            {hasDirectPair
+                              ? 'Direct Specialist'
+                              : 'Pivot Specialist (via EN)'}
+                          </div>
+                          <div className="text-[11px] text-slate-400 mt-0.5">
+                            Fast Helsinki-NLP MarianMT neural translator tuned
+                            for this language pair.
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {selectedOpusReady ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 text-[10px] font-semibold border border-emerald-500/30">
+                              <CheckCircle2 className="w-3 h-3" />
+                              {t('readyOffline')}
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-mono text-slate-400 bg-slate-800 px-2 py-0.5 rounded">
+                              ~{selectedOpusPairs.length * 85} MB
+                            </span>
+                          )}
+                          {selectedTranslator === 'opus-mt-da-en' && (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-600 text-white">
+                              SELECTED
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Universal / Multilanguage & Skip */}
+                  <div className="space-y-2">
+                    {(modelsStatus.translation_models || [])
+                      .filter(
+                        (tm) =>
+                          tm.id !== 'opus-mt-da-en' &&
+                          tm.id !== 'whisper-native'
+                      )
+                      .map((tm) => {
+                        const isSel = selectedTranslator === tm.id;
+                        return (
+                          <div
+                            key={tm.id}
+                            onClick={() => setSelectedTranslator(tm.id)}
+                            className={`p-3.5 rounded-xl border cursor-pointer transition flex items-start justify-between gap-3 ${
+                              isSel
+                                ? 'bg-emerald-950/25 border-emerald-500 shadow-md shadow-emerald-500/10'
+                                : 'bg-slate-900/90 border-slate-800 hover:border-slate-700'
+                            }`}
+                          >
+                            <div className="min-w-0">
+                              <div className="text-xs font-bold text-white">
+                                {tm.name}
+                              </div>
+                              <div className="text-[11px] text-slate-400 mt-0.5">
+                                {tm.description}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              {tm.downloaded ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 text-[10px] font-semibold border border-emerald-500/30">
+                                  <CheckCircle2 className="w-3 h-3" />
+                                  {t('readyOffline')}
+                                </span>
+                              ) : (
+                                <span className="text-[10px] font-mono text-slate-400 bg-slate-800 px-2 py-0.5 rounded">
+                                  ~{tm.size_mb} MB
+                                </span>
+                              )}
+                              {isSel && (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-600 text-white">
+                                  SELECTED
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                  </div>
+                </div>
+              )}
+
+              {/* Compact Selected Setup Summary Strip */}
+              <div className="rounded-xl bg-slate-950/70 border border-slate-800 px-3.5 py-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-400">
+                <span>
+                  <strong className="text-indigo-300">Splitter:</strong>{' '}
+                  {selectedSpeaker}
+                </span>
+                <span>
+                  <strong className="text-blue-300">Transcribe:</strong>{' '}
+                  {selectedWhisper}
+                </span>
+                <span>
+                  <strong className="text-amber-300">Clarify:</strong>{' '}
+                  {selectedClarifier === 'none' ? 'Skip' : selectedClarifier}
+                </span>
+                <span>
+                  <strong className="text-emerald-300">Translate:</strong>{' '}
+                  {selectedTranslator === 'none'
+                    ? 'Skip'
+                    : selectedTranslator === 'opus-mt-da-en'
+                    ? `OPUS (${onboardingTransFrom.toUpperCase()}→${onboardingTransTo.toUpperCase()})`
+                    : selectedTranslator}
+                </span>
               </div>
             </div>
           )}
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 bg-slate-950/60 border-t border-slate-800 flex items-center justify-between gap-3">
+        <div className="relative px-6 py-4 bg-slate-950/60 border-t border-slate-800/80 flex items-center justify-between gap-3">
           {step === 1 ? (
             <>
-              <div className="text-[11px] text-slate-400">
-                {t('zeroCloudBadge')}
+              <div className="inline-flex items-center gap-1.5 text-[11px] text-slate-400">
+                <Shield className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span>{t('zeroCloudBadge')}</span>
               </div>
               <button
                 type="button"
@@ -3776,10 +4185,14 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                         'onboarding',
                         selectedWhisper,
                         selectedTranslator,
-                        selectedClarifier
+                        selectedClarifier,
+                        selectedSpeaker,
+                        selectedTranslator === 'opus-mt-da-en'
+                          ? selectedOpusPairs
+                          : undefined
                       )
                     }
-                    className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-xs font-semibold text-white shadow-lg shadow-indigo-600/25 transition"
+                    className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-xs font-semibold text-white shadow-lg shadow-blue-600/25 transition"
                   >
                     {isBusy ? (
                       <Loader2 className="w-4 h-4 animate-spin" />

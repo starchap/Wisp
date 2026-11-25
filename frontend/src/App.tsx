@@ -566,6 +566,7 @@ export function App() {
           onAccept={() => {
             saveEulaAcceptance(uiLanguage);
             setEulaAccepted(true);
+            setIsOnboardingOpen(true);
           }}
         />
       ) : (
